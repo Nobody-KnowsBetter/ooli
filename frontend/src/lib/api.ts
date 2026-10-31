@@ -48,6 +48,7 @@ export interface Issue {
   created_at: string;
   diff_preview?: string;
   is_applicable?: boolean;
+  engine?: string;
 }
 
 export interface AutoFixProposal {
@@ -85,19 +86,90 @@ export interface SettingsData {
     confidence_threshold: string;
     auto_comment: string;
     github_app_name: string;
-    github_installation_status: string;
-    monitored_branches: string;
   };
   system: {
     github_token_configured: boolean;
     github_webhook_secret_configured: boolean;
-    gemini_api_key_configured: boolean;
-    openai_api_key_configured: boolean;
+    model: string;
+    ollama_running: boolean;
+    model_ready: boolean;
     environment: string;
   };
 }
 
+export interface Health {
+  ai_provider: string;
+  model: string;
+  ollama_running: boolean;
+  model_ready: boolean;
+}
+
+export interface ScanResult {
+  report_id: string;
+  repo_id: string;
+  changes_checked: number;
+  total_drifts: number;
+  confirmed_drifts: number;
+  possible_drifts: number;
+  health_score: number;
+}
+
+// "No drift" means something different when there was no code change to check.
+export function describeScan(result: ScanResult, target: string): string {
+  if (result.total_drifts > 0) {
+    return `${result.total_drifts} drift${result.total_drifts === 1 ? '' : 's'} found in ${target}. See Issues.`;
+  }
+  if (result.changes_checked === 0) {
+    return `Nothing to check: ${target} has no user-facing Python changes we can analyze.`;
+  }
+  return `No drift: checked ${result.changes_checked} code change${result.changes_checked === 1 ? '' : 's'} in ${target}.`;
+}
+
 const API_BASE = '/api';
+const SELECTED_REPO_KEY = 'docguard.selectedRepo';
+
+// Shows the backend's own message, which says what to fix.
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    return body.detail || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function getSelectedRepo(): string | null {
+  try {
+    return localStorage.getItem(SELECTED_REPO_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setSelectedRepo(repoId: string): void {
+  try {
+    localStorage.setItem(SELECTED_REPO_KEY, repoId);
+    window.dispatchEvent(new Event('docguard-repo-changed'));
+  } catch {
+    // Without storage, scans use the default repository.
+  }
+}
+
+export async function getHealth(): Promise<Health> {
+  const res = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Backend is not reachable');
+  return res.json();
+}
+
+export async function addRepository(repository: string): Promise<Repository> {
+  const res = await fetch(`${API_BASE}/repositories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repository }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, 'Could not add repository'));
+  return res.json();
+}
 
 export async function getOverview(): Promise<OverviewData> {
   const res = await fetch(`${API_BASE}/overview`, { cache: 'no-store' });
@@ -142,13 +214,17 @@ export async function getAutoFixProposals(): Promise<AutoFixProposal[]> {
   return res.json();
 }
 
-export async function triggerLiveScan(baseRef: string = 'HEAD~1', headRef: string = 'HEAD'): Promise<any> {
+export async function triggerLiveScan(options: { repoId?: string | null; prNumber?: number } = {}): Promise<ScanResult> {
+  const repoId = options.repoId ?? getSelectedRepo();
   const res = await fetch(`${API_BASE}/scan/live`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base_ref: baseRef, head_ref: headRef }),
+    body: JSON.stringify({
+      ...(repoId ? { repo_id: repoId } : {}),
+      ...(options.prNumber ? { pr_number: options.prNumber } : {}),
+    }),
   });
-  if (!res.ok) throw new Error('Scan failed');
+  if (!res.ok) throw new Error(await errorMessage(res, 'Scan failed'));
   return res.json();
 }
 

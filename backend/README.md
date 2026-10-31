@@ -170,8 +170,7 @@ JavaBasicPrograms1/
 │   │   └── main.py                  # FastAPI server & GitHub webhook receiver
 │   └── requirements.txt
 ├── frontend/
-│   └── public/
-│       └── index.html               # Linear/Vercel inspired dark-mode dashboard
+│   └── src/                         # Next.js dashboard (localhost:3000)
 ├── src/
 │   ├── config.py                    # Demo configuration
 │   └── docguard.py                  # Standalone CLI & GitHub Actions runner

@@ -75,6 +75,7 @@ class CodeVisitor(ast.NodeVisitor):
         self.functions: dict[str, FunctionSignature] = {}
         self.classes: dict[str, ClassStructure] = {}
         self.env_vars: dict[str, tuple[Optional[str], int]] = {}
+        self.flags: dict[str, tuple[Optional[str], int]] = {}  # "--timeout" -> (default, line)
         self.current_class: Optional[str] = None
         self.current_function: Optional[str] = None
 
@@ -169,6 +170,22 @@ class CodeVisitor(ast.NodeVisitor):
                 var_name = var_name.strip("'\"")
                 default_val = _node_to_str(node.args[1]) if len(node.args) > 1 else None
                 self.env_vars[var_name] = (default_val, node.lineno)
+
+        # Detect CLI flags: parser.add_argument("--x") and click.option("--x")
+        if call_str.endswith((".add_argument", ".option")):
+            flag = next(
+                (
+                    arg.value
+                    for arg in node.args
+                    if isinstance(arg, ast.Constant)
+                    and isinstance(arg.value, str)
+                    and arg.value.startswith("--")
+                ),
+                None,
+            )
+            if flag:
+                default = next((_node_to_str(kw.value) for kw in node.keywords if kw.arg == "default"), None)
+                self.flags[flag] = (default, node.lineno)
         self.generic_visit(node)
 
 
@@ -385,6 +402,56 @@ def compare_python_ast(
                     line_number=line,
                     diff_hunk=f"env var {var}: default changed from {old_def} to {new_def}",
                     details={"env_var": var},
+                )
+            )
+
+    # 4. CLI Flags
+    old_flags = old_ast.flags if old_ast else {}
+    new_flags = new_ast.flags if new_ast else {}
+    # Keep source order, so several renames in one file pair up correctly.
+    removed_flags = [f for f in old_flags if f not in new_flags]
+    added_flags = [f for f in new_flags if f not in old_flags]
+
+    # Equal numbers gone and added means renames. Otherwise we can't tell, so we call them removals.
+    if new_ast and len(removed_flags) == len(added_flags):
+        for old_flag, new_flag in zip(removed_flags, added_flags):
+            changes.append(
+                CodeChange(
+                    file_path=file_path,
+                    change_type=ChangeType.FLAG_RENAMED,
+                    symbol_name=old_flag,
+                    old_value=old_flag,
+                    new_value=new_flag,
+                    line_number=new_flags[new_flag][1],
+                    diff_hunk=f"- add_argument(\"{old_flag}\")\n+ add_argument(\"{new_flag}\")",
+                )
+            )
+    else:
+        for old_flag in removed_flags:
+            changes.append(
+                CodeChange(
+                    file_path=file_path,
+                    change_type=ChangeType.FLAG_REMOVED,
+                    symbol_name=old_flag,
+                    old_value=old_flag,
+                    line_number=old_flags[old_flag][1],
+                    diff_hunk=f"- add_argument(\"{old_flag}\")",
+                )
+            )
+
+    for flag in sorted(old_flags.keys() & new_flags.keys()):
+        old_default, _ = old_flags[flag]
+        new_default, line = new_flags[flag]
+        if old_default != new_default:
+            changes.append(
+                CodeChange(
+                    file_path=file_path,
+                    change_type=ChangeType.FLAG_DEFAULT_CHANGED,
+                    symbol_name=flag,
+                    old_value=old_default or "",
+                    new_value=new_default or "",
+                    line_number=line,
+                    diff_hunk=f"{flag} default: {old_default} -> {new_default}",
                 )
             )
 

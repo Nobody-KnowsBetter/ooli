@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -102,6 +103,34 @@ IGNORE_DOC_PARTS = {
 }
 
 
+# These files describe the past, so old values in them are correct.
+HISTORY_DOC_RE = re.compile(r"(changelog|changes|history|news|release[-_ ]?notes|migrat|upgrad)", re.IGNORECASE)
+
+
+def is_checked_doc(rel_path: str) -> bool:
+    path = Path(rel_path)
+    if path.suffix.lower() not in {".md", ".rst"} or path.name == "docguard-report.md":
+        return False
+    if any(part in IGNORE_DOC_PARTS for part in path.parts):
+        return False
+    return not HISTORY_DOC_RE.search(rel_path)
+
+
+def load_docs_at_ref(repo_root: Path, ref: str) -> list[DocSection]:
+    """Loads docs as they were at a commit, so a PR's own doc edits and old history scan correctly."""
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo_root, capture_output=True, text=True, errors="ignore", check=True
+        ).stdout
+
+    sections: list[DocSection] = []
+    for rel_path in git("ls-tree", "-r", "--name-only", ref).splitlines():
+        if is_checked_doc(rel_path):
+            sections.extend(chunk_markdown_file(rel_path, git("show", f"{ref}:{rel_path}")))
+    return sections
+
+
 def load_and_chunk_docs(repo_root: Path, doc_files: Optional[list[str]] = None) -> list[DocSection]:
     """Loads all documentation files from repo root and breaks them into sections."""
     all_sections: list[DocSection] = []
@@ -111,13 +140,11 @@ def load_and_chunk_docs(repo_root: Path, doc_files: Optional[list[str]] = None) 
         paths = list(repo_root.glob("**/*.md")) + list(repo_root.glob("**/*.rst"))
 
     for p in paths:
-        # Ignore git, cache, virtualenvs, test artifacts, and reports
-        if any(part in IGNORE_DOC_PARTS for part in p.parts):
-            continue
-        if p.name in {"docguard-report.md"}:
-            continue
         try:
             rel_path = str(p.relative_to(repo_root))
+            # Ignore git, cache, virtualenvs, reports and history files
+            if not is_checked_doc(rel_path):
+                continue
             text = p.read_text(encoding="utf-8", errors="ignore")
             all_sections.extend(chunk_markdown_file(rel_path, text))
         except Exception:

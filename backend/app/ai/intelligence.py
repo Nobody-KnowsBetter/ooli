@@ -1,11 +1,13 @@
-"""AI Intelligence Engine for DocGuard with multi-provider support and grounded reasoning."""
+"""DocGuard's decision engine: exact rules, plus a small local Qwen model for ambiguous sentences."""
 from __future__ import annotations
 
 import json
 import os
 import re
+import sys
 from abc import ABC, abstractmethod
-from typing import Optional
+
+import httpx
 
 from backend.app.ai.prompts import ANALYSIS_PROMPT_TEMPLATE, SYSTEM_PROMPT
 from backend.app.analyzer.models import (
@@ -16,6 +18,10 @@ from backend.app.analyzer.models import (
     Finding,
     Verdict,
 )
+from backend.app.analyzer.doc_mapper import clean_value, contains_flag, contains_value
+
+DEFAULT_MODEL = "qwen2.5-coder:3b"
+MODEL_TIMEOUT_SECONDS = 180.0
 
 
 class BaseAIProvider(ABC):
@@ -59,84 +65,80 @@ class HeuristicAIProvider(BaseAIProvider):
             ChangeType.PARAMETER_CHANGED,
             ChangeType.ENV_VAR_CHANGED,
         }:
-            old_val = str(change.old_value or "")
-            new_val = str(change.new_value or "")
+            old_val = clean_value(change.old_value)
+            new_val = clean_value(change.new_value)
             sym_name = change.symbol_name.split(".")[-1]
+            # TIMEOUT_SECONDS -> "timeout", "seconds": how prose usually refers to a symbol.
+            name_words = [w for w in re.split(r"[_\W]+", sym_name.lower()) if len(w) > 2]
 
-            # 1. Search for lines in documentation referencing the symbol or old value
-            matching_lines = [
-                (section.start_line + i, line.strip())
-                for i, line in enumerate(doc_lines)
-                if sym_name.lower() in line.lower() or (old_val and old_val in line)
-            ]
+            for offset, line_text in enumerate(doc_lines):
+                if not old_val or not contains_value(old_val, line_text) or contains_value(new_val, line_text):
+                    continue
 
-            drift_found = False
-            for line_no, line_text in matching_lines:
-                # If documentation line already contains the new value, NO DRIFT!
-                if new_val and (new_val in line_text or f"**{new_val}**" in line_text):
-                    verdict = Verdict.NO_DRIFT_DETECTED
-                    confidence = 0.95
-                    explanation = f"Documentation line {line_no} accurately references updated value '{new_val}' for '{sym_name}'."
-                    evidence = [f"Found updated value '{new_val}' in: {section.file_path}:{line_no}"]
-                    drift_found = False
-                    break
+                lowered = line_text.lower()
+                names_symbol = sym_name.lower() in lowered or any(
+                    re.search(rf"\b{re.escape(w)}", lowered) for w in name_words
+                )
+                line_no = section.start_line + offset
+                found_start_line = found_end_line = line_no
+                outdated_excerpt = line_text.strip()
+                suggested_fix = re.sub(rf"(?<![\w.]){re.escape(old_val)}(?!\w|\.\d)", new_val, outdated_excerpt)
+                evidence = [
+                    f"Source code: {change.file_path}:{change.line_number}",
+                    f"Diff: {change.diff_hunk}",
+                    f"Documentation {section.file_path}:{line_no} says '{old_val}' and not '{new_val}'",
+                ]
 
-                # If the line contains conflicting numbers
-                nums = re.findall(r"\b\d+\b", line_text)
-                if new_val.isdigit() and nums and (new_val not in nums):
-                    conflicting_val = old_val if old_val in nums else nums[0]
-                    found_start_line = line_no
-                    found_end_line = line_no
-                    outdated_excerpt = line_text
+                if names_symbol:
                     verdict = Verdict.CONFIRMED_DRIFT
                     confidence = 0.98
-                    explanation = f"Value for '{sym_name}' is '{new_val}' in code ({change.file_path}), but documentation states '{conflicting_val}'."
-                    suggested_fix = re.sub(rf"\b{re.escape(conflicting_val)}\b", new_val, line_text, count=1)
-                    evidence = [
-                        f"Source code: {change.file_path}:{change.line_number}",
-                        f"Diff: {change.diff_hunk}",
-                        f"Documentation {section.file_path}:{line_no} contains contradictory value '{conflicting_val}' and lacks '{new_val}'",
-                    ]
-                    drift_found = True
+                    explanation = f"'{sym_name}' changed from '{old_val}' to '{new_val}' in {change.file_path}, but this sentence still says '{old_val}'."
                     break
 
-                # If line contains old_val
-                elif old_val and (old_val in line_text):
-                    found_start_line = line_no
-                    found_end_line = line_no
-                    outdated_excerpt = line_text
-                    verdict = Verdict.CONFIRMED_DRIFT
-                    confidence = 0.98
-                    explanation = f"Value for '{sym_name}' was changed from '{old_val}' to '{new_val}' in {change.file_path}, but documentation still states '{old_val}'."
-                    suggested_fix = line_text.replace(old_val, new_val)
-                    evidence = [
-                        f"Source code: {change.file_path}:{change.line_number}",
-                        f"Diff: {change.diff_hunk}",
-                        f"Documentation {section.file_path}:{line_no} contains old value '{old_val}' and lacks '{new_val}'",
-                    ]
-                    drift_found = True
-                    break
+                # Same value but no mention of the symbol. It may be a coincidence, so keep looking.
+                verdict = Verdict.POSSIBLE_DRIFT
+                confidence = 0.55
+                explanation = f"'{sym_name}' changed from '{old_val}' to '{new_val}', and this sentence mentions '{old_val}' without naming it. It may or may not describe this setting."
 
-            # Fallback if no direct symbol line matched: check section content
-            if not drift_found and verdict != Verdict.NO_DRIFT_DETECTED:
-                if new_val and (new_val in section.content):
-                    verdict = Verdict.NO_DRIFT_DETECTED
-                    confidence = 0.92
-                    explanation = f"Documentation already contains updated value '{new_val}' for symbol '{sym_name}'."
-                elif old_val and (old_val in section.content):
-                    line_no, line_text = find_line_with(old_val)
-                    found_start_line = line_no
-                    found_end_line = line_no
-                    outdated_excerpt = line_text
+        # CLI flags
+        elif change.change_type in {ChangeType.FLAG_RENAMED, ChangeType.FLAG_REMOVED}:
+            old_flag = str(change.old_value)
+            new_flag = change.new_value
+            for offset, line_text in enumerate(doc_lines):
+                if not contains_flag(old_flag, line_text):
+                    continue
+                line_no = section.start_line + offset
+                found_start_line = found_end_line = line_no
+                outdated_excerpt = line_text.strip()
+                verdict = Verdict.CONFIRMED_DRIFT
+                confidence = 0.97
+                if new_flag:
+                    explanation = f"Flag '{old_flag}' was renamed to '{new_flag}' in {change.file_path}:{change.line_number}, but this sentence still says '{old_flag}'."
+                    suggested_fix = outdated_excerpt.replace(old_flag, str(new_flag))
+                else:
+                    explanation = f"Flag '{old_flag}' was removed in {change.file_path}, but this sentence still describes it."
+                evidence = [f"Source code: {change.file_path}:{change.line_number}", f"Diff: {change.diff_hunk}"]
+                break
+
+        elif change.change_type == ChangeType.FLAG_DEFAULT_CHANGED:
+            old_val = clean_value(change.old_value)
+            new_val = clean_value(change.new_value)
+            for offset, line_text in enumerate(doc_lines):
+                if (
+                    old_val
+                    and contains_flag(change.symbol_name, line_text)
+                    and contains_value(old_val, line_text)
+                    and not contains_value(new_val, line_text)
+                ):
+                    line_no = section.start_line + offset
+                    found_start_line = found_end_line = line_no
+                    outdated_excerpt = line_text.strip()
                     verdict = Verdict.CONFIRMED_DRIFT
-                    confidence = 0.88
-                    explanation = f"Value for '{sym_name}' was changed from '{old_val}' to '{new_val}' in {change.file_path}, but documentation still states '{old_val}'."
-                    suggested_fix = line_text.replace(old_val, new_val)
-                    evidence = [
-                        f"Source code modified: {change.file_path}:{change.line_number}",
-                        f"Diff: {change.diff_hunk}",
-                        f"Documentation {section.file_path}:{line_no} contains old value '{old_val}' and lacks '{new_val}'",
-                    ]
+                    confidence = 0.97
+                    explanation = f"The default of '{change.symbol_name}' changed from '{old_val}' to '{new_val}' in {change.file_path}, but this sentence still says '{old_val}'."
+                    suggested_fix = re.sub(rf"(?<![\w.]){re.escape(old_val)}(?!\w|\.\d)", new_val, outdated_excerpt)
+                    evidence = [f"Source code: {change.file_path}:{change.line_number}", f"Diff: {change.diff_hunk}"]
+                    break
 
         # SCENARIO 3: FUNCTION_RENAMED
         elif change.change_type == ChangeType.FUNCTION_RENAMED:
@@ -173,7 +175,7 @@ class HeuristicAIProvider(BaseAIProvider):
                     verdict = Verdict.CONFIRMED_DRIFT
                     confidence = 0.94
                     explanation = f"Parameter '{r_arg}' was removed from '{func_name}', but documentation still lists it."
-                    suggested_fix = f"Remove reference to parameter `{r_arg}` from documentation."
+                    suggested_fix = ""  # Removing it takes a human rewrite, so we don't propose text.
                     evidence = [
                         f"Signature changed in {change.file_path}: removed parameter '{r_arg}'",
                         f"Documentation line {line_no} still lists `{r_arg}`",
@@ -202,13 +204,6 @@ class HeuristicAIProvider(BaseAIProvider):
                     f"Documentation {section.file_path}:{line_no} contains outdated route '{old_path}'",
                 ]
 
-        # SCENARIO 10: AMBIGUOUS / INSUFFICIENT EVIDENCE
-        if verdict == Verdict.NO_DRIFT_DETECTED and pair.relevance_score > 0.4 and pair.relevance_score < 0.6:
-            verdict = Verdict.POSSIBLE_DRIFT
-            confidence = 0.52
-            explanation = "Potential association detected between code change and documentation, but evidence is insufficient to confirm drift."
-            evidence = [f"Relevance match reason: {pair.relevance_reason}"]
-
         return Finding(
             verdict=verdict,
             confidence=confidence,
@@ -226,91 +221,98 @@ class HeuristicAIProvider(BaseAIProvider):
         )
 
 
-class LLMAIProvider(BaseAIProvider):
-    """LLM Provider supporting OpenAI, Gemini, or Anthropic via HTTP API with fallback to Heuristic."""
+class QwenProvider(BaseAIProvider):
+    """Uses a small Qwen model, running locally through Ollama, for what rules can't decide.
 
-    def __init__(self, api_key: str, provider_name: str = "gemini") -> None:
-        self.api_key = api_key
-        self.provider_name = provider_name.lower()
-        self.heuristic_fallback = HeuristicAIProvider()
+    Rules handle exact matches. When a sentence has the old value but doesn't name the setting
+    ("Requests give up after 30 seconds"), the model decides if it's about that setting or a coincidence.
+    The model only answers yes or no, so it can't invent a sentence or a fix.
+    """
+
+    def __init__(self) -> None:
+        self.heuristic = HeuristicAIProvider()
 
     def evaluate(self, pair: CandidatePair) -> Finding:
+        finding = self.heuristic.evaluate(pair)
+        if finding.verdict != Verdict.POSSIBLE_DRIFT:
+            return finding
+
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
-            file_path=pair.change.file_path,
-            change_type=pair.change.change_type.value,
             symbol_name=pair.change.symbol_name,
-            old_value=pair.change.old_value or "N/A",
-            new_value=pair.change.new_value or "N/A",
-            diff_hunk=pair.change.diff_hunk,
-            doc_file=pair.section.file_path,
+            file_path=pair.change.file_path,
+            old_value=pair.change.old_value,
+            new_value=pair.change.new_value,
             doc_title=pair.section.title,
-            start_line=pair.section.start_line,
-            end_line=pair.section.end_line,
-            doc_content=pair.section.content,
+            sentence=finding.outdated_excerpt,
         )
-
         try:
-            import httpx
+            resp = httpx.post(
+                f"{ollama_url()}/api/chat",
+                json={
+                    "model": model_name(),
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "format": "json",
+                    "stream": False,
+                    "keep_alive": "1m",  # Gives the memory back soon after a scan.
+                    "options": {"temperature": 0, "seed": 42},
+                },
+                timeout=MODEL_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            answer = json.loads(resp.json()["message"]["content"])["describes_setting"]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            print(f"Qwen unavailable, keeping this as possible drift: {exc}", file=sys.stderr)
+            return finding
 
-            if self.provider_name == "openai" or "openai" in self.provider_name:
-                resp = httpx.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": "gpt-4o-mini",
-                        "messages": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": prompt},
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.0,
-                    },
-                    timeout=15.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()["choices"][0]["message"]["content"]
-                    parsed = json.loads(data)
-                    return self._build_finding(pair, parsed)
-        except Exception:
-            pass
+        finding.engine = model_name()
+        if answer is True:
+            finding.verdict = Verdict.CONFIRMED_DRIFT
+            finding.confidence = 0.85
+            finding.explanation = (
+                f"{finding.explanation.split(', and this')[0]}. {model_name()} confirmed this sentence is about that setting."
+            )
+            finding.evidence.append(f"{model_name()}: this sentence describes {pair.change.symbol_name}")
+        else:
+            finding.verdict = Verdict.NO_DRIFT_DETECTED
+        return finding
 
-        return self.heuristic_fallback.evaluate(pair)
 
-    def _build_finding(self, pair: CandidatePair, res: dict) -> Finding:
-        verdict_str = res.get("verdict", "NO_DRIFT_DETECTED")
-        try:
-            verdict = Verdict(verdict_str)
-        except ValueError:
-            verdict = Verdict.NO_DRIFT_DETECTED
+def ollama_url() -> str:
+    return os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 
-        return Finding(
-            verdict=verdict,
-            confidence=float(res.get("confidence", 0.5)),
-            source_file=pair.change.file_path,
-            changed_symbol=pair.change.symbol_name,
-            doc_file=pair.section.file_path,
-            doc_start_line=pair.section.start_line,
-            doc_end_line=pair.section.end_line,
-            outdated_excerpt=res.get("outdated_excerpt", ""),
-            explanation=res.get("explanation", ""),
-            suggested_fix=res.get("suggested_fix", ""),
-            change_type=pair.change.change_type,
-            code_diff=pair.change.diff_hunk,
-            evidence=res.get("evidence", []),
-        )
+
+def model_name() -> str:
+    return os.getenv("DOCGUARD_MODEL", DEFAULT_MODEL)
+
+
+def model_status() -> dict[str, object]:
+    """Reports whether Ollama is running and has our model, for the dashboard and the scan."""
+    status: dict[str, object] = {"model": model_name(), "ollama_running": False, "model_ready": False}
+    try:
+        resp = httpx.get(f"{ollama_url()}/api/tags", timeout=2.0)
+        resp.raise_for_status()
+        status["ollama_running"] = True
+        status["model_ready"] = model_name() in {m.get("name") for m in resp.json().get("models", [])}
+    except (httpx.HTTPError, ValueError):
+        pass
+    return status
+
+
+def selected_provider_name() -> str:
+    """The environment variable wins, then the dashboard setting."""
+    if os.getenv("DOCGUARD_AI_PROVIDER"):
+        return os.environ["DOCGUARD_AI_PROVIDER"].lower()
+
+    from backend.app.database.db import get_settings_data, init_db
+
+    init_db()  # The CLI runs on fresh machines, such as CI, where no database exists yet.
+    return (get_settings_data().get("ai_provider") or "qwen").lower()
 
 
 def get_ai_provider() -> BaseAIProvider:
-    provider = os.getenv("DOCGUARD_AI_PROVIDER", "").lower()
-    openai_key = os.getenv("OPENAI_API_KEY")
-    gemini_key = os.getenv("GEMINI_API_KEY")
-
-    if (provider == "openai" or not provider) and openai_key:
-        return LLMAIProvider(openai_key, provider_name="openai")
-    elif (provider == "gemini" or not provider) and gemini_key:
-        return LLMAIProvider(gemini_key, provider_name="gemini")
-
+    if selected_provider_name() == "qwen" and model_status()["model_ready"]:
+        return QwenProvider()
     return HeuristicAIProvider()

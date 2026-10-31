@@ -1,14 +1,16 @@
 """Tests for FastAPI backend endpoints."""
 from fastapi.testclient import TestClient
 from backend.app.main import app
+from backend.app.repos import local_repo_id
 
 client = TestClient(app)
 
 
-def test_api_dashboard_index():
+def test_root_only_points_to_the_dashboard():
     res = client.get("/")
     assert res.status_code == 200
-    assert "DocGuard" in res.text
+    assert res.json()["dashboard"] == "http://localhost:3000"
+    assert "text/html" not in res.headers["content-type"]
 
 
 def test_api_health():
@@ -34,7 +36,7 @@ def test_api_repositories():
     data = res.json()
     assert isinstance(data, list)
     assert len(data) >= 1
-    assert "JavaBasicPrograms1" in data[0]["full_name"]
+    assert data[0]["full_name"] == local_repo_id()
 
 
 def test_api_scan_live():

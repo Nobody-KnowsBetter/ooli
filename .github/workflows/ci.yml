@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install the project and its test tools
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" -r backend/requirements.txt
 
       - name: Run the tests
         run: pytest
