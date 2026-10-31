@@ -89,6 +89,9 @@ export function Sidebar({ auth }: { auth: AuthStatus }) {
             <span className={`h-1.5 w-1.5 rounded-full ${dotColor[engineStatus.color]}`}></span>
             <span>{engineStatus.label}</span>
           </div>
+          {!usingModel && health?.model_problem && (
+            <p className="mt-1 text-[11px] text-zinc-600">{health.model_problem}</p>
+          )}
         </div>
 
         {/* Nav Links */}

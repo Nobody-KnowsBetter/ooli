@@ -102,6 +102,10 @@ def init_db() -> None:
     for table, column, definition in [
         ("findings", "engine", "TEXT DEFAULT 'heuristic'"),
         ("scan_reports", "pr_title", "TEXT"),
+        ("scan_reports", "complete", "INTEGER DEFAULT 0"),
+        ("scan_reports", "threshold", "REAL"),
+        ("scan_reports", "analyzer_version", "INTEGER DEFAULT 0"),
+        ("scan_reports", "changes_checked", "INTEGER DEFAULT 0"),
         ("repositories", "description", "TEXT DEFAULT ''"),
         ("repositories", "language", "TEXT DEFAULT ''"),
         ("repositories", "is_private", "INTEGER DEFAULT 0"),
@@ -148,6 +152,10 @@ def save_scan_report(
     health_score: float,
     findings: list[dict[str, Any]],
     pr_title: Optional[str] = None,
+    complete: bool = False,
+    threshold: Optional[float] = None,
+    analyzer_version: int = 0,
+    changes_checked: int = 0,
 ) -> None:
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -155,8 +163,8 @@ def save_scan_report(
 
     cursor.execute(
         """
-        INSERT INTO scan_reports (id, repo_id, base_sha, head_sha, pr_number, pr_title, status, total_drifts, confirmed_drifts, possible_drifts, health_score, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scan_reports (id, repo_id, base_sha, head_sha, pr_number, pr_title, status, total_drifts, confirmed_drifts, possible_drifts, health_score, created_at, complete, threshold, analyzer_version, changes_checked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             report_id,
@@ -171,16 +179,18 @@ def save_scan_report(
             possible_drifts,
             health_score,
             now,
+            int(complete),
+            threshold,
+            analyzer_version,
+            changes_checked,
         ),
     )
 
     cursor.execute(
         """
-        UPDATE repositories
-        SET health_score = ?, last_scanned_at = ?
-        WHERE id = ?
+        UPDATE repositories SET last_scanned_at = ? WHERE id = ?
     """,
-        (health_score, now, repo_id),
+        (now, repo_id),
     )
 
     # A new scan of a pull request replaces the last one, so a sentence fixed in the PR gets resolved.
@@ -238,6 +248,7 @@ def save_scan_report(
             ),
         )
 
+    _refresh_repo_health(conn, repo_id)
     conn.commit()
     conn.close()
 
@@ -257,6 +268,59 @@ def repository_exists(repo_id: str) -> bool:
     row = conn.execute("SELECT 1 FROM repositories WHERE id = ?", (repo_id,)).fetchone()
     conn.close()
     return row is not None
+
+
+def _refresh_repo_health(conn: sqlite3.Connection, repo_id: str) -> None:
+    """A repository's score reflects what's open now, so it doesn't jump with each scan."""
+    counts = dict(
+        conn.execute(
+            """
+            SELECT f.verdict, COUNT(*) FROM findings f JOIN scan_reports r ON f.report_id = r.id
+            WHERE r.repo_id = ? AND f.is_fixed = 0 GROUP BY f.verdict
+        """,
+            (repo_id,),
+        ).fetchall()
+    )
+    score = 100.0 - counts.get("CONFIRMED_DRIFT", 0) * 18.0 - counts.get("POSSIBLE_DRIFT", 0) * 6.0
+    conn.execute("UPDATE repositories SET health_score = ? WHERE id = ?", (max(0.0, score), repo_id))
+
+
+def find_saved_report(
+    repo_id: str, base_sha: str, head_sha: str, threshold: float, analyzer_version: int
+) -> Optional[dict[str, Any]]:
+    """The latest result for exactly this change, so a commit always gives the same answer."""
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT * FROM scan_reports
+        WHERE repo_id = ? AND base_sha = ? AND head_sha = ? AND threshold = ? AND analyzer_version = ?
+        ORDER BY created_at DESC LIMIT 1
+    """,
+        (repo_id, base_sha, head_sha, threshold, analyzer_version),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    report = dict(row)
+    report["findings"] = [
+        dict(f) for f in conn.execute("SELECT * FROM findings WHERE report_id = ?", (report["id"],)).fetchall()
+    ]
+    conn.close()
+    return report
+
+
+def latest_pr_report(repo_id: str, pr_number: int, head_sha: str, analyzer_version: int) -> Optional[dict[str, Any]]:
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT * FROM scan_reports
+        WHERE repo_id = ? AND pr_number = ? AND head_sha = ? AND analyzer_version = ?
+        ORDER BY created_at DESC LIMIT 1
+    """,
+        (repo_id, pr_number, head_sha, analyzer_version),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def sync_user_repositories(login: str, repos: list[dict[str, Any]]) -> None:
@@ -324,16 +388,6 @@ def set_open_prs(repo_id: str, count: int) -> None:
     conn.execute("UPDATE repositories SET open_prs = ? WHERE id = ?", (count, repo_id))
     conn.commit()
     conn.close()
-
-
-def pr_already_scanned(repo_id: str, pr_number: int, head_sha: str) -> bool:
-    conn = get_db_connection()
-    row = conn.execute(
-        "SELECT 1 FROM scan_reports WHERE repo_id = ? AND pr_number = ? AND head_sha = ? LIMIT 1",
-        (repo_id, pr_number, head_sha),
-    ).fetchone()
-    conn.close()
-    return row is not None
 
 
 def _repo_filter(column: str, repo_ids: Optional[set[str]]) -> tuple[str, list[str]]:
@@ -429,6 +483,11 @@ def mark_issue_fixed(issue_id: str) -> bool:
     cursor = conn.cursor()
     cursor.execute("UPDATE findings SET is_fixed = 1 WHERE id = ?", (issue_id,))
     success = cursor.rowcount > 0
+    row = cursor.execute(
+        "SELECT r.repo_id FROM findings f JOIN scan_reports r ON f.report_id = r.id WHERE f.id = ?", (issue_id,)
+    ).fetchone()
+    if row:
+        _refresh_repo_health(conn, row["repo_id"])
     conn.commit()
     conn.close()
     return success

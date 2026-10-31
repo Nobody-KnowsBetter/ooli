@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from backend.app.ai.intelligence import HeuristicAIProvider, get_ai_provider
+from backend.app.ai.intelligence import HeuristicAIProvider, QwenProvider, get_ai_provider
 from backend.app.analyzer.ast_analyzer import compare_python_ast, parse_python_ast
 from backend.app.analyzer.doc_chunker import load_docs_at_ref
 from backend.app.analyzer.doc_mapper import map_changes_to_docs
@@ -17,6 +17,9 @@ from backend.app.analyzer.models import ChangeType, CodeChange, DocSection, Find
 
 # Local models are slow, so only the most relevant candidates reach Qwen.
 MAX_MODEL_CALLS = 8
+
+# Raise this when detection changes, so earlier saved results for a commit get rescanned.
+ANALYZER_VERSION = 2
 
 # A PR comment should stay short enough that people read it.
 MAX_REPORTED = 10
@@ -94,6 +97,12 @@ class ScanResult:
     confirmed_drifts: int = 0
     possible_drifts: int = 0
     health_score: float = 100.0
+    # False if a sentence is still waiting for the model, so a later scan can finish the job.
+    complete: bool = True
+    changes_checked: Optional[int] = None
+
+    def change_count(self) -> int:
+        return len(self.code_changes) if self.changes_checked is None else self.changes_checked
 
     def drifts(self) -> list[Finding]:
         """Drift findings, the most certain first."""
@@ -111,7 +120,7 @@ class ScanResult:
         lines = ["## DocGuard report", ""]
 
         if not drifts:
-            checked = len(self.code_changes)
+            checked = self.change_count()
             lines.append(f"No drift found. Checked {checked} code change{'' if checked == 1 else 's'}.")
             return "\n".join(lines) + "\n"
 
@@ -257,9 +266,19 @@ def run_analysis(
     ai_provider = get_ai_provider()
     heuristic = HeuristicAIProvider()
     findings: list[Finding] = []
-    for index, cand in enumerate(candidates):
-        provider = ai_provider if index < MAX_MODEL_CALLS else heuristic
-        finding = provider.evaluate(cand)
+    model_calls = 0
+    waiting_for_model = False
+    for cand in candidates:
+        # Rules decide first, so only the sentences they can't settle use up model calls.
+        finding = heuristic.evaluate(cand)
+        if finding.verdict == Verdict.POSSIBLE_DRIFT:
+            if not isinstance(ai_provider, QwenProvider):
+                waiting_for_model = True
+            elif model_calls < MAX_MODEL_CALLS:
+                model_calls += 1
+                finding = ai_provider.evaluate(cand)
+                # Still "possible" after asking means the model didn't answer.
+                waiting_for_model = waiting_for_model or finding.verdict == Verdict.POSSIBLE_DRIFT
         finding.source_line = cand.change.line_number
 
         if HISTORICAL_RE.search(finding.outdated_excerpt):
@@ -295,4 +314,5 @@ def run_analysis(
         confirmed_drifts=confirmed,
         possible_drifts=possible,
         health_score=health,
+        complete=not waiting_for_model,
     )

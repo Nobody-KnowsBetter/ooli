@@ -22,6 +22,7 @@ from backend.app.analyzer.doc_mapper import clean_value, contains_flag, contains
 
 DEFAULT_MODEL = "qwen2.5-coder:3b"
 MODEL_TIMEOUT_SECONDS = 180.0
+MODEL_CHECK_TIMEOUT_SECONDS = 10.0  # Long enough for a server overseas to reach a tunnel.
 MAX_SENTENCES_PER_SECTION = 4
 
 
@@ -318,15 +319,38 @@ def model_name() -> str:
 
 
 def model_status() -> dict[str, object]:
-    """Reports whether Ollama is running and has our model, for the dashboard and the scan."""
-    status: dict[str, object] = {"model": model_name(), "ollama_running": False, "model_ready": False}
+    """Reports whether Ollama can be reached and has our model, and if not, why."""
+    status: dict[str, object] = {
+        "model": model_name(),
+        "ollama_running": False,
+        "model_ready": False,
+        "model_problem": "",
+    }
     try:
-        resp = httpx.get(f"{ollama_url()}/api/tags", timeout=2.0)
+        resp = httpx.get(
+            f"{ollama_url()}/api/tags",
+            timeout=MODEL_CHECK_TIMEOUT_SECONDS,
+            headers={"User-Agent": "DocGuard"},
+            follow_redirects=True,
+        )
         resp.raise_for_status()
         status["ollama_running"] = True
-        status["model_ready"] = model_name() in {m.get("name") for m in resp.json().get("models", [])}
-    except (httpx.HTTPError, ValueError):
-        pass
+        installed = {m.get("name") for m in resp.json().get("models", [])}
+        status["model_ready"] = model_name() in installed
+        if not status["model_ready"]:
+            status["model_problem"] = f"Ollama is reachable, but doesn't have {model_name()}."
+    except httpx.InvalidURL:
+        status["model_problem"] = "OLLAMA_URL isn't a valid address."
+    except httpx.UnsupportedProtocol:
+        status["model_problem"] = "OLLAMA_URL must start with http:// or https://."
+    except httpx.TimeoutException:
+        status["model_problem"] = f"No answer from Ollama within {MODEL_CHECK_TIMEOUT_SECONDS:.0f} seconds."
+    except httpx.HTTPStatusError as exc:
+        status["model_problem"] = f"The Ollama address answered with HTTP {exc.response.status_code}. Check the link in OLLAMA_URL."
+    except httpx.HTTPError as exc:
+        status["model_problem"] = f"Couldn't connect to Ollama ({type(exc).__name__})."
+    except ValueError:
+        status["model_problem"] = "The address in OLLAMA_URL answered, but not like Ollama does."
     return status
 
 

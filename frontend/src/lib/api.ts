@@ -108,6 +108,7 @@ export interface SettingsData {
     model: string;
     ollama_running: boolean;
     model_ready: boolean;
+    model_problem: string;
     environment: string;
   };
 }
@@ -117,6 +118,7 @@ export interface Health {
   model: string;
   ollama_running: boolean;
   model_ready: boolean;
+  model_problem: string;
 }
 
 export interface ScanResult {
