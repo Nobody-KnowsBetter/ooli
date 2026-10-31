@@ -127,7 +127,7 @@ export default function SettingsPage() {
                 </span>
               ) : (
                 <span className="text-amber-700">
-                  {data?.system.ollama_running ? `Run: ollama pull ${data.system.model}` : 'Not running: start Ollama'}
+                  {data?.system.model_problem || 'Checking...'}
                 </span>
               )}
             </div>

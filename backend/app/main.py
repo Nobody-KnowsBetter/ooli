@@ -395,7 +395,7 @@ def run_live_scan(req: ScanRequest, request: Request) -> dict[str, Any]:
         "repo_id": repo_id,
         "base_ref": base_ref,
         "head_ref": head_ref,
-        "changes_checked": len(scan.code_changes),
+        "changes_checked": scan.change_count(),
         "total_drifts": scan.total_drifts,
         "confirmed_drifts": scan.confirmed_drifts,
         "possible_drifts": scan.possible_drifts,

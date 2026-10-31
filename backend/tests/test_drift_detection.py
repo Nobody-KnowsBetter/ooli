@@ -309,3 +309,54 @@ def test_the_cli_works_on_a_fresh_machine_without_falling_back(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "1"
+
+
+def status_with(monkeypatch, *, response=None, error=None):
+    def get(url, timeout, headers, follow_redirects):
+        if error:
+            raise error
+        return httpx.Response(response[0], request=httpx.Request("GET", url), json=response[1])
+
+    monkeypatch.setattr(intelligence.httpx, "get", get)
+    return intelligence.model_status()
+
+
+def test_model_status_is_ready_when_the_model_is_there(monkeypatch):
+    status = status_with(monkeypatch, response=(200, {"models": [{"name": intelligence.DEFAULT_MODEL}]}))
+    assert status["model_ready"] is True
+    assert status["model_problem"] == ""
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"response": (200, {"models": []})}, "doesn't have"),
+        ({"response": (530, {})}, "HTTP 530"),
+        ({"error": httpx.ReadTimeout("slow")}, "No answer"),
+        ({"error": httpx.ConnectError("down")}, "ConnectError"),
+        ({"error": httpx.UnsupportedProtocol("no scheme")}, "must start with"),
+    ],
+)
+def test_model_status_says_why_it_is_offline(monkeypatch, kwargs, expected):
+    status = status_with(monkeypatch, **kwargs)
+    assert status["model_ready"] is False
+    assert expected in status["model_problem"]
+
+
+def test_only_undecided_sentences_use_up_model_calls(tmp_path, monkeypatch):
+    calls = []
+
+    class CountingQwen(intelligence.QwenProvider):
+        def evaluate(self, pair):
+            calls.append(pair.change.symbol_name)
+            finding = self.heuristic.evaluate(pair)
+            finding.verdict = Verdict.NO_DRIFT_DETECTED
+            return finding
+
+    monkeypatch.setattr("backend.app.analyzer.pipeline.get_ai_provider", lambda: CountingQwen())
+    monkeypatch.setattr("backend.app.analyzer.pipeline.QwenProvider", intelligence.QwenProvider)
+    old = "".join(f"NAMED_{i} = 50{i}\n" for i in range(12)) + "TIMEOUT = 30\n"
+    new = "".join(f"NAMED_{i} = 90{i}\n" for i in range(12)) + "TIMEOUT = 60\n"
+    doc = "".join(f"NAMED_{i} is 50{i}.\n" for i in range(12)) + "\n# Other\nRequests give up after 30 seconds.\n"
+    scan(tmp_path, old, new, doc)
+    assert calls == ["TIMEOUT"]

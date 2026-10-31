@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import github_auth, repos, sync
+from backend.app.ai.intelligence import HeuristicAIProvider, QwenProvider
 from backend.app.database import db
 from backend.app.github_auth import Session
 from backend.app.main import app
@@ -191,3 +192,68 @@ def test_sync_status_and_trigger(two_users):
     assert octo.post("/api/sync").json() == {"started": True}
     assert github_auth.sync_wanted.is_set()
     github_auth.sync_wanted.clear()
+
+
+def test_the_same_commit_always_gives_the_same_answer(github):
+    first = sync.scan_repository("octo/app", "tok", pr_number=7)
+    second = sync.scan_repository("octo/app", "tok", pr_number=7)
+    assert second[0] == first[0]  # The saved report, not a new scan.
+    assert second[3].total_drifts == first[3].total_drifts == 1
+    assert [f.outdated_excerpt for f in second[3].drifts()] == ["Use --timeout to stop slow jobs."]
+    assert second[3].generate_markdown_report() == first[3].generate_markdown_report()
+
+
+def test_refs_are_saved_as_exact_commits(github):
+    _, base, head, _ = sync.scan_repository("octo/app", "tok", pr_number=7)
+    assert head == github["head"]
+    assert len(base) == 40
+
+
+def paraphrase_repo(github):
+    work = github["work"]
+    git(work, "switch", "-q", "main")
+    (work / "cli.py").write_text('parser.add_argument("--timeout")\nTTL = 300\n')
+    (work / "README.md").write_text("Results stay available for 300 seconds.\n")
+    git(work, "commit", "-qam", "base")
+    git(work, "switch", "-qc", "ttl")
+    (work / "cli.py").write_text('parser.add_argument("--timeout")\nTTL = 900\n')
+    git(work, "commit", "-qam", "ttl")
+    head = git(work, "rev-parse", "HEAD")
+    git(work, "push", "-q", "--force", str(github["bare"]), "main", f"{head}:refs/pull/8/head")
+    return head
+
+
+def test_a_result_waiting_for_the_model_is_finished_when_it_returns(github, monkeypatch):
+    paraphrase_repo(github)
+    first = sync.scan_repository("octo/app", "tok", pr_number=8)
+    assert first[3].possible_drifts == 1 and first[3].complete is False
+
+    # Still no model: the same answer.
+    assert sync.scan_repository("octo/app", "tok", pr_number=8)[0] == first[0]
+
+    class YesQwen(QwenProvider):
+        def _describes_setting(self, pair, sentence):
+            return True
+
+    monkeypatch.setattr(sync, "get_ai_provider", lambda: YesQwen())
+    monkeypatch.setattr("backend.app.analyzer.pipeline.get_ai_provider", lambda: YesQwen())
+    upgraded = sync.scan_repository("octo/app", "tok", pr_number=8)
+    assert upgraded[3].confirmed_drifts == 1 and upgraded[3].complete is True
+    assert [i["verdict"] for i in issues_for("octo/app")] == ["CONFIRMED_DRIFT"]
+
+    # A finished result stays finished, even if the model goes away again.
+    monkeypatch.setattr(sync, "get_ai_provider", lambda: HeuristicAIProvider())
+    monkeypatch.setattr("backend.app.analyzer.pipeline.get_ai_provider", lambda: HeuristicAIProvider())
+    assert sync.scan_repository("octo/app", "tok", pr_number=8)[3].confirmed_drifts == 1
+
+
+def test_repo_score_follows_open_issues(github):
+    sync.scan_repository("octo/app", "tok", pr_number=7)
+    conn = db.get_db_connection()
+    score = lambda: conn.execute("SELECT health_score FROM repositories WHERE id = 'octo/app'").fetchone()[0]
+    assert score() == 82.0
+    conn.close()
+    db.mark_issue_fixed(issues_for("octo/app")[0]["id"])
+    conn = db.get_db_connection()
+    assert score() == 100.0
+    conn.close()
