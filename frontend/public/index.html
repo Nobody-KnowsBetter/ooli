@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocGuard — AI Documentation Intelligence Platform</title>
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            },
+            surface: {
+              DEFAULT: '#0B0F19',
+              card: '#111827',
+              border: '#1F2937',
+              hover: '#1E293B',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #07090E;
+      color: #E2E8F0;
+      font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    }
+    .glass-panel {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-panel:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    .pulse-glow {
+      box-shadow: 0 0 20px -3px rgba(99, 102, 241, 0.3);
+    }
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0B0F19;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1F2937;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #374151;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+
+  <!-- Top Navbar -->
+  <header class="border-b border-surface-border bg-surface/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <div class="flex items-center space-x-3">
+          <div class="h-9 w-9 rounded-lg bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+            <i data-lucide="shield-check" class="w-5 h-5"></i>
+          </div>
+          <span class="font-bold text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">DocGuard</span>
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono">v1.0-prod</span>
+        
+        <div class="hidden md:flex items-center text-sm text-gray-400 pl-6 border-l border-surface-border">
+          <i data-lucide="git-pull-request" class="w-4 h-4 mr-2 text-gray-500"></i>
+          <span class="font-mono text-xs text-gray-300" id="currentRepo">krishgarg-code/JavaBasicPrograms1</span>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <div class="flex items-center space-x-2 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>GitHub App Active</span>
+        </div>
+
+        <button id="btnScan" onclick="triggerScan()" class="flex items-center space-x-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition text-white px-3.5 py-2 rounded-lg shadow-md shadow-indigo-600/30">
+          <i data-lucide="refresh-cw" id="scanIcon" class="w-3.5 h-3.5"></i>
+          <span id="scanText">Trigger AST Scan</span>
+        </button>
+
+        <a href="https://github.com/krishgarg-code/JavaBasicPrograms1" target="_blank" class="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-surface-hover transition">
+          <i data-lucide="github" class="w-4 h-4"></i>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- Hero / Metrics Overview -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <!-- Health Score -->
+      <div class="glass-panel p-5 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Doc Health Score</p>
+          <div class="flex items-baseline space-x-2 mt-1">
+            <span class="text-3xl font-bold font-mono text-white" id="statHealth">100%</span>
+            <span class="text-xs text-emerald-400 flex items-center"><i data-lucide="trending-up" class="w-3 h-3 mr-0.5"></i> Healthy</span>
+          </div>
+        </div>
+        <div class="h-12 w-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+          <i data-lucide="activity" class="w-6 h-6"></i>
+        </div>
+      </div>
+
+      <!-- Active Drifts -->
+      <div class="glass-panel p-5 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Active Drifts</p>
+          <div class="flex items-baseline space-x-2 mt-1">
+            <span class="text-3xl font-bold font-mono text-white" id="statDrifts">0</span>
+            <span class="text-xs text-gray-400">issues requiring review</span>
+          </div>
+        </div>
+        <div class="h-12 w-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+          <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+        </div>
+      </div>
+
+      <!-- Monitored AST Symbols -->
+      <div class="glass-panel p-5 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Tracked Symbols</p>
+          <div class="flex items-baseline space-x-2 mt-1">
+            <span class="text-3xl font-bold font-mono text-white">4</span>
+            <span class="text-xs text-indigo-400">AST parsed</span>
+          </div>
+        </div>
+        <div class="h-12 w-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+          <i data-lucide="code" class="w-6 h-6"></i>
+        </div>
+      </div>
+
+      <!-- Auto-Fix Readiness -->
+      <div class="glass-panel p-5 rounded-xl flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">Auto-Fix Engine</p>
+          <div class="flex items-baseline space-x-2 mt-1">
+            <span class="text-3xl font-bold font-mono text-white">Ready</span>
+            <span class="text-xs text-purple-400">1-click patches</span>
+          </div>
+        </div>
+        <div class="h-12 w-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+          <i data-lucide="wand-2" class="w-6 h-6"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Findings / Inspection Section -->
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-white flex items-center space-x-2">
+          <i data-lucide="layers" class="w-5 h-5 text-indigo-400"></i>
+          <span>Documentation Drift Findings</span>
+        </h2>
+        <span class="text-xs text-gray-400" id="scanTimestamp">Live analysis from current Git revision</span>
+      </div>
+
+      <div id="findingsContainer" class="space-y-4">
+        <!-- Will be populated via JS -->
+      </div>
+    </div>
+
+    <!-- History & Recent Scans Table -->
+    <div class="space-y-4 pt-4">
+      <h2 class="text-lg font-semibold text-white flex items-center space-x-2">
+        <i data-lucide="history" class="w-5 h-5 text-gray-400"></i>
+        <span>Scan History & Pull Request Reports</span>
+      </h2>
+
+      <div class="glass-panel rounded-xl overflow-hidden border border-surface-border">
+        <table class="w-full text-left text-sm text-gray-400">
+          <thead class="bg-surface-card text-xs uppercase font-mono border-b border-surface-border text-gray-300">
+            <tr>
+              <th class="px-6 py-3.5">Report ID</th>
+              <th class="px-6 py-3.5">Commit Range</th>
+              <th class="px-6 py-3.5">Drifts Detected</th>
+              <th class="px-6 py-3.5">Health Score</th>
+              <th class="px-6 py-3.5">Status</th>
+              <th class="px-6 py-3.5 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody" class="divide-y divide-surface-border">
+            <!-- Populated via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Auto-Fix Modal -->
+  <div id="fixModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="glass-panel bg-surface-card border border-surface-border rounded-2xl max-w-2xl w-full p-6 space-y-6 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-surface-border pb-4">
+        <div class="flex items-center space-x-3">
+          <div class="h-8 w-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
+            <i data-lucide="git-merge" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h3 class="font-semibold text-white text-base">Auto-Fix Documentation Patch</h3>
+            <p class="text-xs text-gray-400" id="modalDocFile">docs/configuration.md</p>
+          </div>
+        </div>
+        <button onclick="closeModal()" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-surface-hover">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3">
+        <p class="text-xs font-mono uppercase text-gray-400">Unified Diff Preview:</p>
+        <div class="bg-black/60 rounded-xl p-4 font-mono text-xs overflow-x-auto border border-surface-border max-h-60" id="modalDiffPreview">
+          <!-- Diff lines -->
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between pt-4 border-t border-surface-border">
+        <span class="text-xs text-gray-400">Human-in-the-loop: Changes require your confirmation.</span>
+        <div class="flex items-center space-x-3">
+          <button onclick="closeModal()" class="px-4 py-2 text-xs font-medium text-gray-300 hover:text-white hover:bg-surface-hover rounded-lg transition">Cancel</button>
+          <button id="btnApplyFix" onclick="applyCurrentFix()" class="px-4 py-2 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-lg transition flex items-center space-x-2 shadow-lg shadow-emerald-600/30">
+            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+            <span>Approve & Apply Patch</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="border-t border-surface-border py-6 text-center text-xs text-gray-500">
+    DocGuard Documentation Intelligence Platform &bull; Built with FastAPI, AST Intelligence &amp; Modern UI
+  </footer>
+
+  <script>
+    let activeFindingForFix = null;
+
+    async function loadData() {
+      lucide.createIcons();
+      try {
+        // Fetch reports
+        const res = await fetch('/api/reports');
+        const reports = await res.json();
+        renderHistory(reports);
+
+        // Fetch latest scan or run scan
+        if (reports.length > 0) {
+          const detailRes = await fetch(`/api/reports/${reports[0].id}`);
+          const detail = await detailRes.json();
+          renderReport(detail);
+        } else {
+          await triggerScan();
+        }
+      } catch (err) {
+        console.error("Error loading reports:", err);
+      }
+    }
+
+    async function triggerScan() {
+      const btn = document.getElementById('btnScan');
+      const icon = document.getElementById('scanIcon');
+      const text = document.getElementById('scanText');
+
+      icon.classList.add('animate-spin');
+      text.textContent = 'Analyzing AST...';
+
+      try {
+        const res = await fetch('/api/scan/live', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({base_ref: 'HEAD~1', head_ref: 'HEAD'})
+        });
+        const data = await res.json();
+        renderReport(data);
+
+        const repRes = await fetch('/api/reports');
+        const reports = await repRes.json();
+        renderHistory(reports);
+      } catch (err) {
+        alert("Scan failed: " + err);
+      } finally {
+        icon.classList.remove('animate-spin');
+        text.textContent = 'Trigger AST Scan';
+      }
+    }
+
+    function renderReport(report) {
+      document.getElementById('statHealth').textContent = Math.round(report.health_score) + '%';
+      document.getElementById('statDrifts').textContent = report.total_drifts || 0;
+
+      const container = document.getElementById('findingsContainer');
+      container.innerHTML = '';
+
+      if (!report.findings || report.findings.length === 0) {
+        container.innerHTML = `
+          <div class="glass-panel rounded-xl p-8 text-center space-y-3">
+            <div class="h-12 w-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 mx-auto flex items-center justify-center">
+              <i data-lucide="check-circle-2" class="w-6 h-6"></i>
+            </div>
+            <h3 class="text-base font-semibold text-white">Documentation Is Fully Synchronized</h3>
+            <p class="text-sm text-gray-400 max-w-md mx-auto">
+              No documentation drift detected. All tracked code symbols and configuration values match the markdown documentation.
+            </p>
+          </div>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      report.findings.forEach((f, idx) => {
+        const isConfirmed = f.verdict === 'CONFIRMED_DRIFT';
+        const card = document.createElement('div');
+        card.className = "glass-panel rounded-xl p-6 space-y-5 border border-surface-border";
+
+        card.innerHTML = `
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-surface-border pb-4">
+            <div class="flex items-center space-x-3">
+              <span class="px-2.5 py-1 rounded-full text-xs font-mono font-medium ${isConfirmed ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}">
+                ${isConfirmed ? '🔴 CONFIRMED DRIFT' : '🟡 POSSIBLE DRIFT'}
+              </span>
+              <span class="text-xs text-gray-400 font-mono">Confidence: <b class="text-white">${Math.round(f.confidence * 100)}%</b></span>
+            </div>
+
+            <button onclick='openFixModal(${JSON.stringify(f).replace(/'/g, "&apos;")})' class="flex items-center space-x-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-lg transition shadow-md shadow-indigo-600/20">
+              <i data-lucide="wand-2" class="w-3.5 h-3.5"></i>
+              <span>Preview & Apply Fix</span>
+            </button>
+          </div>
+
+          <!-- Side by Side Diff -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <!-- Code Change -->
+            <div class="space-y-2">
+              <div class="flex items-center justify-between text-xs text-gray-400">
+                <span class="flex items-center space-x-1.5 font-mono"><i data-lucide="file-code" class="w-3.5 h-3.5 text-indigo-400"></i><span>${f.source_file || 'Code'}</span></span>
+                <span class="px-2 py-0.5 rounded bg-surface-hover font-mono">${f.changed_symbol}</span>
+              </div>
+              <div class="bg-black/60 rounded-xl p-3 font-mono text-xs border border-surface-border overflow-x-auto text-gray-300">
+                <pre class="leading-relaxed whitespace-pre-wrap">${f.code_diff || 'Modified symbol'}</pre>
+              </div>
+            </div>
+
+            <!-- Outdated Doc -->
+            <div class="space-y-2">
+              <div class="flex items-center justify-between text-xs text-gray-400">
+                <span class="flex items-center space-x-1.5 font-mono"><i data-lucide="file-text" class="w-3.5 h-3.5 text-amber-400"></i><span>${f.doc_file} (Line ${f.doc_start_line})</span></span>
+                <span class="text-red-400 text-xs">Outdated Prose</span>
+              </div>
+              <div class="bg-black/60 rounded-xl p-3 font-sans text-xs border border-surface-border text-gray-300">
+                <blockquote class="border-l-2 border-red-500/60 pl-3 italic text-red-200">
+                  "${f.outdated_excerpt}"
+                </blockquote>
+                <p class="mt-2 text-gray-400 text-xs">${f.explanation}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Suggested fix preview -->
+          ${f.suggested_fix ? `
+            <div class="bg-emerald-500/5 border border-emerald-500/15 rounded-xl p-3.5 flex items-start space-x-3 text-xs">
+              <i data-lucide="sparkles" class="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0"></i>
+              <div class="space-y-1">
+                <span class="font-medium text-emerald-400">Suggested Documentation Correction:</span>
+                <p class="text-emerald-200/90 font-mono">"${f.suggested_fix}"</p>
+              </div>
+            </div>
+          ` : ''}
+        `;
+        container.appendChild(card);
+      });
+
+      lucide.createIcons();
+    }
+
+    function renderHistory(reports) {
+      const tbody = document.getElementById('historyTableBody');
+      tbody.innerHTML = '';
+      reports.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-surface-hover/50 transition cursor-pointer";
+        tr.onclick = async () => {
+          const detailRes = await fetch(`/api/reports/${r.id}`);
+          const detail = await detailRes.json();
+          renderReport(detail);
+        };
+        tr.innerHTML = `
+          <td class="px-6 py-4 font-mono text-xs text-indigo-400">${r.id}</td>
+          <td class="px-6 py-4 font-mono text-xs text-gray-300">${r.base_sha?.slice(0, 7)}...${r.head_sha?.slice(0, 7)}</td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-0.5 rounded text-xs font-mono ${r.total_drifts > 0 ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}">
+              ${r.total_drifts} drift${r.total_drifts === 1 ? '' : 's'}
+            </span>
+          </td>
+          <td class="px-6 py-4 font-mono text-xs font-bold text-white">${Math.round(r.health_score)}%</td>
+          <td class="px-6 py-4 text-xs text-emerald-400 flex items-center space-x-1.5"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span><span>COMPLETED</span></td>
+          <td class="px-6 py-4 text-right">
+            <button class="text-xs text-indigo-400 hover:text-indigo-300 font-medium">Inspect &rarr;</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function openFixModal(finding) {
+      activeFindingForFix = finding;
+      document.getElementById('modalDocFile').textContent = finding.doc_file + ` (Line ${finding.doc_start_line})`;
+      const previewRes = await fetch('/api/autofix/preview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          doc_file: finding.doc_file,
+          outdated_excerpt: finding.outdated_excerpt,
+          suggested_fix: finding.suggested_fix
+        })
+      });
+      const preview = await previewRes.json();
+
+      const previewBox = document.getElementById('modalDiffPreview');
+      if (preview.diff) {
+        previewBox.innerHTML = preview.diff.split('\n').map(line => {
+          if (line.startsWith('+')) return `<div class="text-emerald-400">${escapeHtml(line)}</div>`;
+          if (line.startsWith('-')) return `<div class="text-red-400">${escapeHtml(line)}</div>`;
+          return `<div class="text-gray-400">${escapeHtml(line)}</div>`;
+        }).join('');
+      } else {
+        previewBox.textContent = "No text replacement computed.";
+      }
+
+      document.getElementById('fixModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeModal() {
+      document.getElementById('fixModal').classList.add('hidden');
+    }
+
+    async function applyCurrentFix() {
+      if (!activeFindingForFix) return;
+      const btn = document.getElementById('btnApplyFix');
+      btn.textContent = 'Applying...';
+      try {
+        const res = await fetch('/api/autofix/apply', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            doc_file: activeFindingForFix.doc_file,
+            outdated_excerpt: activeFindingForFix.outdated_excerpt,
+            suggested_fix: activeFindingForFix.suggested_fix
+          })
+        });
+        const data = await res.json();
+        alert(data.message || "Fix successfully applied!");
+        closeModal();
+        await triggerScan();
+      } catch (err) {
+        alert("Failed to apply fix: " + err);
+      } finally {
+        btn.textContent = 'Approve & Apply Patch';
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    window.addEventListener('DOMContentLoaded', loadData);
+  </script>
+</body>
+</html>
+
