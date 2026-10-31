@@ -10,7 +10,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.0
       - key: DOCGUARD_AI_PROVIDER
-        value: heuristic
+        value: qwen
       - key: DATABASE_URL
         value: sqlite:///./docguard.db
 
