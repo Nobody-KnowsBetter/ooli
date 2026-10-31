@@ -7,6 +7,7 @@ import { isPortal, useAuth } from '@/components/AuthContext';
 import { Header } from '@/components/Header';
 import { GithubIcon } from '@/components/GithubIcon';
 import {
+  addGithubAction,
   addRepository,
   describeScan,
   getPullRequests,
@@ -31,6 +32,28 @@ export default function RepositoriesPage() {
   const [pulls, setPulls] = useState<Record<string, PullRequest[]>>({});
   const [prNumbers, setPrNumbers] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [actionLinks, setActionLinks] = useState<Record<string, { url: string; installed: boolean }>>({});
+
+  const handleAddAction = async (repoId: string) => {
+    setInstalling(repoId);
+    setMessage(null);
+    try {
+      const result = await addGithubAction(repoId);
+      if (!result) return; // On its way to GitHub for permission.
+      setActionLinks((links) => ({ ...links, [repoId]: { url: result.url, installed: result.already_installed } }));
+      setMessage({
+        ok: true,
+        text: result.already_installed
+          ? `${repoId} already has DocGuard's GitHub Action.`
+          : `Setup pull request opened on ${repoId}. Merge it, and every pull request gets checked.`,
+      });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Could not add the GitHub Action' });
+    } finally {
+      setInstalling(null);
+    }
+  };
 
   const loadRepos = async () => {
     try {
@@ -196,7 +219,27 @@ export default function RepositoriesPage() {
                       </span>
                     </button>
 
-                    <div className="flex items-center gap-3 shrink-0">
+                    <div className="flex flex-wrap items-center gap-3 shrink-0">
+                      {portal &&
+                        (actionLinks[repo.id] || repo.action_pr_url ? (
+                          <a
+                            href={actionLinks[repo.id]?.url ?? repo.action_pr_url ?? '#'}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-medium text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-xl"
+                          >
+                            {actionLinks[repo.id]?.installed ? 'Action installed' : 'View setup PR'}
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={installing !== null}
+                            onClick={() => handleAddAction(repo.id)}
+                            className="text-xs font-semibold bg-ink hover:bg-zinc-700 text-white px-3 py-1.5 rounded-xl transition disabled:opacity-50"
+                          >
+                            {installing === repo.id ? 'Opening PR...' : 'Add to GitHub Actions'}
+                          </button>
+                        ))}
                       {issues > 0 ? (
                         <Link
                           href="/dashboard/issues"

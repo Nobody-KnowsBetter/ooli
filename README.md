@@ -5,13 +5,15 @@ points to the code change responsible.
 
 ## Use it on your repository
 
-Add `.github/workflows/docguard.yml`:
+Sign in on the website and click **Add to GitHub Actions** on a repository. DocGuard opens a setup pull request, and once you merge it, every pull request gets checked. You can also add `.github/workflows/docguard.yml` yourself:
 
 ```yaml
 name: DocGuard
 
+# Runs on pull requests from forks too, so outside contributors see the report.
+# DocGuard only reads the pull request's code. It never runs it.
 on:
-  pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -24,16 +26,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Nobody-KnowsBetter/ooli@v1
+      - uses: Nobody-KnowsBetter/ooli@main
 ```
 
-Every pull request now gets a comment naming the exact doc sentences it made wrong, the code change responsible and a suggested fix. There's no comment when nothing drifted. Everything runs inside your own GitHub Actions: no account, no API key, and your code stays there.
+Every pull request now gets a comment naming the exact doc sentences it made wrong, the code change responsible, a suggested fix and a link to fix it in that pull request. There's no comment when nothing drifted. Everything runs inside your own GitHub Actions: no account, no API key, and your code stays there.
 
 | Input | Default | What it does |
 |---|---|---|
 | `use-model` | `true` | Runs Qwen for sentences the rules can't decide. It's only downloaded when one exists. |
 | `model` | `qwen2.5-coder:3b` | The Ollama model to use. |
-| `comment` | `true` | Posts the report on the pull request. Pull requests from forks get it in the job summary instead, because GitHub gives them read-only access. |
+| `comment` | `true` | Posts the report on the pull request. It always appears in the job summary too. |
 | `fail-on-drift` | `false` | Fails the check when it confirms drift. |
 
 Outputs: `drift-count`, `confirmed-count`, `possible-count`.

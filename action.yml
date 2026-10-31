@@ -48,6 +48,14 @@ runs:
         "${{ steps.python.outputs.python-path }}" -m venv "$RUNNER_TEMP/docguard-venv"
         "$RUNNER_TEMP/docguard-venv/bin/pip" install --quiet --disable-pip-version-check "httpx>=0.27"
 
+    # A fork's commits aren't in a normal checkout. They are only read as data here, never run.
+    - name: Fetch the pull request's commits
+      if: github.event_name == 'pull_request_target'
+      shell: bash
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: git fetch --quiet --no-tags origin "refs/pull/$PR_NUMBER/head"
+
     # Rules are instant, and they tell us whether the 2 GB model is needed at all.
     - name: Check with rules
       id: rules
@@ -55,6 +63,7 @@ runs:
       shell: bash
       env:
         DOCGUARD_AI_PROVIDER: heuristic
+        DOCGUARD_EDIT_BASE: ${{ github.server_url }}/${{ github.event.pull_request.head.repo.full_name }}/edit/${{ github.event.pull_request.head.ref }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
@@ -92,6 +101,7 @@ runs:
       shell: bash
       env:
         DOCGUARD_AI_PROVIDER: qwen
+        DOCGUARD_EDIT_BASE: ${{ github.server_url }}/${{ github.event.pull_request.head.repo.full_name }}/edit/${{ github.event.pull_request.head.ref }}
         DOCGUARD_MODEL: ${{ inputs.model }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -119,7 +129,7 @@ runs:
     - name: Comment on the pull request
       if: >-
         steps.final.outcome == 'success' && inputs.comment == 'true' &&
-        github.event.pull_request.head.repo.full_name == github.repository
+        (github.event_name == 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository)
       continue-on-error: true # Missing permissions shouldn't fail the check. The job summary has the report.
       uses: actions/github-script@v7
       env:

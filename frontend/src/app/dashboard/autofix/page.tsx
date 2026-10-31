@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { isPortal, useAuth } from '@/components/AuthContext';
 import { Header } from '@/components/Header';
-import { getAutoFixProposals, applyFixForIssue, AutoFixProposal, githubFileLinks } from '@/lib/api';
+import { getAutoFixProposals, applyFixForIssue, AutoFixProposal, createFixPullRequest, githubFileLinks } from '@/lib/api';
 
 export default function AutoFixPage() {
   const [proposals, setProposals] = useState<AutoFixProposal[]>([]);
@@ -21,6 +21,29 @@ export default function AutoFixPage() {
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const portal = isPortal(useAuth());
+  const [creating, setCreating] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Everything not yet in a fix pull request and with suggested text, grouped by repository.
+  const waitingByRepo = proposals.reduce<Record<string, AutoFixProposal[]>>((groups, p) => {
+    if (p.suggested_fix && !p.fix_pr_url) (groups[p.repo_id] ??= []).push(p);
+    return groups;
+  }, {});
+
+  const openFixPr = async (key: string, issueIds: string[]) => {
+    setCreating(key);
+    setMessage(null);
+    try {
+      const result = await createFixPullRequest(issueIds);
+      if (!result) return; // On its way to GitHub for permission.
+      setMessage({ ok: true, text: 'Fix pull request opened. Review and merge it on GitHub.' });
+      await loadProposals();
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Could not open the fix pull request' });
+    } finally {
+      setCreating(null);
+    }
+  };
 
   const copyFix = async (proposal: AutoFixProposal) => {
     await navigator.clipboard.writeText(proposal.suggested_fix);
@@ -77,7 +100,7 @@ export default function AutoFixPage() {
             </h2>
             <p className="text-xs text-zinc-600">
               {portal
-                ? 'Copy the corrected sentence and paste it in GitHub\'s editor. DocGuard never changes your repository.'
+                ? 'Auto-fix opens a pull request with the corrected sentences. Nothing changes until you merge it.'
                 : 'Each fix replaces one sentence in the local copy of the docs. Nothing is committed for you.'}
             </p>
           </div>
@@ -85,6 +108,30 @@ export default function AutoFixPage() {
             <span>{proposals.length} {proposals.length === 1 ? 'fix' : 'fixes'} waiting</span>
           </div>
         </div>
+
+        {portal &&
+          Object.entries(waitingByRepo).map(([repo, items]) => (
+            <div key={repo} className="flex flex-wrap items-center justify-between gap-3 bg-card border border-border rounded-2xl p-4">
+              <span className="text-xs text-zinc-700">
+                <b className="text-ink">{repo}</b>: {items.length} {items.length === 1 ? 'sentence' : 'sentences'} ready to fix
+              </span>
+              <button
+                type="button"
+                disabled={creating !== null}
+                onClick={() => openFixPr(repo, items.map((p) => p.issue_id))}
+                className="flex items-center space-x-2 text-xs font-semibold bg-ink hover:bg-zinc-700 text-white px-4 py-2 rounded-xl transition disabled:opacity-50"
+              >
+                <Wand2 className="w-3.5 h-3.5" />
+                <span>{creating === repo ? 'Opening pull request...' : `Auto-fix ${items.length === 1 ? 'it' : 'all'} in one PR`}</span>
+              </button>
+            </div>
+          ))}
+
+        {message && (
+          <p role="status" className={`text-xs ${message.ok ? 'text-emerald-700' : 'text-red-700'}`}>
+            {message.text}
+          </p>
+        )}
 
         {/* Proposals List */}
         {loading ? (
@@ -156,11 +203,34 @@ export default function AutoFixPage() {
                             href={links?.edit}
                             target="_blank"
                             rel="noreferrer"
-                            className="flex items-center space-x-1.5 text-xs font-semibold bg-ink hover:bg-zinc-700 text-white px-4 py-2 rounded-xl transition"
+                            className="flex items-center space-x-1.5 text-xs font-medium border border-border hover:border-zinc-400 text-zinc-700 px-3 py-2 rounded-xl transition"
                           >
                             <Pencil className="w-3.5 h-3.5" />
-                            <span>Edit on GitHub</span>
+                            <span>Edit</span>
                           </a>
+                          {p.fix_pr_url ? (
+                            <a
+                              href={p.fix_pr_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center space-x-1.5 text-xs font-semibold text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 px-4 py-2 rounded-xl"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>View fix PR</span>
+                            </a>
+                          ) : (
+                            p.suggested_fix && (
+                              <button
+                                type="button"
+                                disabled={creating !== null}
+                                onClick={() => openFixPr(p.issue_id, [p.issue_id])}
+                                className="flex items-center space-x-1.5 text-xs font-semibold bg-ink hover:bg-zinc-700 text-white px-4 py-2 rounded-xl transition disabled:opacity-50"
+                              >
+                                <Wand2 className="w-3.5 h-3.5" />
+                                <span>{creating === p.issue_id ? 'Opening...' : 'Auto-fix'}</span>
+                              </button>
+                            )
+                          )}
                         </>
                       ) : isApplied ? (
                         <span className="text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 px-3.5 py-1.5 rounded-xl flex items-center space-x-1.5 font-medium">
