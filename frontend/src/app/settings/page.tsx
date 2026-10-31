@@ -5,8 +5,6 @@ import {
   Check,
   Cpu,
   Save,
-  Shield,
-  GitBranch,
 } from 'lucide-react';
 import { GithubIcon } from '@/components/GithubIcon';
 import { Header } from '@/components/Header';
@@ -19,18 +17,16 @@ export default function SettingsPage() {
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   // Form states
-  const [aiProvider, setAiProvider] = useState('heuristic');
+  const [aiProvider, setAiProvider] = useState('qwen');
   const [confidenceThreshold, setConfidenceThreshold] = useState('0.75');
-  const [monitoredBranches, setMonitoredBranches] = useState('main, master, staging');
 
   const loadSettings = async () => {
     try {
       setLoading(true);
       const res = await getSettings();
       setData(res);
-      setAiProvider(res.settings.ai_provider || 'heuristic');
+      setAiProvider(res.settings.ai_provider || 'qwen');
       setConfidenceThreshold(res.settings.confidence_threshold || '0.75');
-      setMonitoredBranches(res.settings.monitored_branches || 'main, master, staging');
     } catch (err) {
       console.error(err);
     } finally {
@@ -49,7 +45,6 @@ export default function SettingsPage() {
       await updateSettings({
         ai_provider: aiProvider,
         confidence_threshold: confidenceThreshold,
-        monitored_branches: monitoredBranches,
       });
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
@@ -64,7 +59,7 @@ export default function SettingsPage() {
     <>
       <Header
         title="Settings &amp; Engine Configuration"
-        subtitle="Manage analysis policies, branch rules, and GitHub webhook security"
+        subtitle="Manage the verification engine and confidence threshold"
       />
 
       <main className="p-6 space-y-6 flex-1 overflow-y-auto max-w-4xl mx-auto w-full">
@@ -83,22 +78,17 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
                 {
+                  id: 'qwen',
+                  name: 'Rules + Qwen 2.5 Coder 3B',
+                  desc: 'Rules decide exact matches. A small open-weight model on this machine decides if a paraphrased sentence is about the changed setting. Uses about 2 GB of memory.',
+                },
+                {
                   id: 'heuristic',
-                  name: 'Deterministic AST Engine',
-                  desc: 'Zero-latency local Python AST parser and symbol validator. No API key required.',
-                },
-                {
-                  id: 'gemini',
-                  name: 'Google Gemini',
-                  desc: 'High-speed multimodal semantic reasoning via GEMINI_API_KEY environment variable.',
-                },
-                {
-                  id: 'openai',
-                  name: 'OpenAI GPT-4o',
-                  desc: 'Structured JSON evidence reasoning via OPENAI_API_KEY environment variable.',
+                  name: 'Rules only',
+                  desc: 'Exact matching with no model. Instant, but only certain when a sentence names the changed setting.',
                 },
               ].map((prov) => (
                 <label
@@ -126,6 +116,20 @@ export default function SettingsPage() {
                   <p className="text-[11px] text-zinc-400 leading-relaxed">{prov.desc}</p>
                 </label>
               ))}
+            </div>
+
+            <div className="flex items-center justify-between p-3.5 rounded bg-black border border-border text-xs font-mono">
+              <span className="text-zinc-300">Ollama ({data?.system.model ?? 'model'})</span>
+              {data?.system.model_ready ? (
+                <span className="text-emerald-400 flex items-center space-x-1.5">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Ready</span>
+                </span>
+              ) : (
+                <span className="text-amber-400">
+                  {data?.system.ollama_running ? `Run: ollama pull ${data.system.model}` : 'Not running: start Ollama'}
+                </span>
+              )}
             </div>
 
             <div className="pt-2 space-y-2">
@@ -157,20 +161,12 @@ export default function SettingsPage() {
                   GitHub Integration &amp; Webhook Security
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  CI workflow hooks, monitored branches, and signature validation.
+                  Signature validation for webhooks sent by GitHub.
                 </p>
               </div>
             </div>
 
             <div className="space-y-3 text-xs font-mono">
-              <div className="flex items-center justify-between p-3.5 rounded bg-black border border-border">
-                <span className="text-zinc-300">GitHub Actions CI Runner</span>
-                <span className="text-emerald-400 flex items-center space-x-1.5">
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Active (.github/workflows/docguard.yml)</span>
-                </span>
-              </div>
-
               <div className="flex items-center justify-between p-3.5 rounded bg-black border border-border">
                 <span className="text-zinc-300">Webhook HMAC-SHA256 Signature</span>
                 <span className="text-zinc-300">
@@ -178,17 +174,6 @@ export default function SettingsPage() {
                 </span>
               </div>
 
-              <div className="space-y-1.5 pt-2">
-                <label className="block text-xs text-zinc-400">
-                  Monitored Git Branches (comma-separated):
-                </label>
-                <input
-                  type="text"
-                  value={monitoredBranches}
-                  onChange={(e) => setMonitoredBranches(e.target.value)}
-                  className="w-full bg-black border border-border rounded px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-zinc-500"
-                />
-              </div>
             </div>
           </div>
 

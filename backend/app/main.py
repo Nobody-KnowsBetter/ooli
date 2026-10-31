@@ -7,19 +7,18 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from backend.app.ai.intelligence import model_status, selected_provider_name
 from backend.app.analyzer.models import Finding, Verdict
 from backend.app.analyzer.pipeline import run_analysis
-from backend.app.autofix.patcher import apply_fix, generate_fix_preview
+from backend.app.autofix.patcher import FixPreview, apply_fix, generate_fix_preview
 from backend.app.database.db import (
+    add_repository,
     get_all_issues,
     get_db_connection,
     get_issue_by_id,
@@ -27,11 +26,12 @@ from backend.app.database.db import (
     get_settings_data,
     init_db,
     mark_issue_fixed,
+    repository_exists,
     save_scan_report,
     update_settings_data,
 )
+from backend.app.repos import RepoError, clone_repo, local_repo_id, parse_repo_name, repo_dir, resolve_refs
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # Ensure database tables exist immediately
 init_db()
@@ -53,27 +53,31 @@ app = FastAPI(
 # Enable CORS for Next.js dashboard
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # This API can edit files.
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount frontend public static files if present
-FRONTEND_DIR = PROJECT_ROOT / "frontend" / "public"
-if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
-    @app.get("/", include_in_schema=False)
-    def serve_dashboard():
-        return FileResponse(str(FRONTEND_DIR / "index.html"))
+@app.get("/", include_in_schema=False)
+def root() -> dict[str, str]:
+    """This server is only the API. The dashboard runs separately on port 3000."""
+    return {
+        "service": "DocGuard API",
+        "dashboard": "http://localhost:3000",
+        "api_docs": "http://localhost:8000/docs",
+    }
 
 
 class ScanRequest(BaseModel):
     base_ref: str = "HEAD~1"
     head_ref: str = "HEAD"
-    repo_id: str = "krishgarg-code/JavaBasicPrograms1"
-    pr_number: Optional[int] = None
+    repo_id: Optional[str] = None  # Defaults to this checkout.
+    pr_number: Optional[int] = None  # Scans that pull request instead of base_ref/head_ref.
+    audit: bool = False  # Also check the whole repository, not only this change.
+
+
+class AddRepositoryRequest(BaseModel):
+    repository: str
 
 
 class AutoFixRequest(BaseModel):
@@ -81,13 +85,29 @@ class AutoFixRequest(BaseModel):
     outdated_excerpt: str
     suggested_fix: str
     issue_id: Optional[str] = None
+    repo_id: Optional[str] = None
 
 
 class SettingsUpdateRequest(BaseModel):
     ai_provider: Optional[str] = None
     confidence_threshold: Optional[str] = None
     auto_comment: Optional[str] = None
-    monitored_branches: Optional[str] = None
+
+
+def _preview_for_issue(issue: dict[str, Any]) -> FixPreview:
+    finding = Finding(
+        verdict=Verdict(issue.get("verdict", "CONFIRMED_DRIFT")),
+        confidence=float(issue.get("confidence", 1.0)),
+        source_file=issue.get("source_file", ""),
+        changed_symbol=issue.get("changed_symbol", ""),
+        doc_file=issue.get("doc_file", ""),
+        doc_start_line=int(issue.get("doc_start_line", 1)),
+        doc_end_line=int(issue.get("doc_end_line", 1)),
+        outdated_excerpt=issue.get("outdated_excerpt", ""),
+        explanation=issue.get("explanation", ""),
+        suggested_fix=issue.get("suggested_fix", ""),
+    )
+    return generate_fix_preview(repo_dir(issue.get("repo_id", "")), finding)
 
 
 @app.get("/api/health")
@@ -96,7 +116,8 @@ def health() -> dict[str, Any]:
         "status": "healthy",
         "service": "DocGuard Platform",
         "version": "1.0.0",
-        "ai_provider": os.getenv("DOCGUARD_AI_PROVIDER", "heuristic"),
+        "ai_provider": selected_provider_name(),
+        **model_status(),
     }
 
 
@@ -114,6 +135,18 @@ def get_repositories() -> list[dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/repositories")
+def add_github_repository(req: AddRepositoryRequest) -> dict[str, Any]:
+    """Clones a public GitHub repository so it can be scanned. Accepts owner/name or a GitHub URL."""
+    try:
+        repo_id = parse_repo_name(req.repository)
+        branch = clone_repo(repo_id)
+    except RepoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    add_repository(repo_id, branch)
+    return {"id": repo_id, "full_name": repo_id, "default_branch": branch}
 
 
 @app.get("/api/reports")
@@ -175,20 +208,7 @@ def get_issue(issue_id: str) -> dict[str, Any]:
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
 
-    # Generate unified diff preview
-    dummy_finding = Finding(
-        verdict=Verdict(issue.get("verdict", "CONFIRMED_DRIFT")),
-        confidence=float(issue.get("confidence", 1.0)),
-        source_file=issue.get("source_file", ""),
-        changed_symbol=issue.get("changed_symbol", ""),
-        doc_file=issue.get("doc_file", ""),
-        doc_start_line=int(issue.get("doc_start_line", 1)),
-        doc_end_line=int(issue.get("doc_end_line", 1)),
-        outdated_excerpt=issue.get("outdated_excerpt", ""),
-        explanation=issue.get("explanation", ""),
-        suggested_fix=issue.get("suggested_fix", ""),
-    )
-    preview = generate_fix_preview(PROJECT_ROOT, dummy_finding)
+    preview = _preview_for_issue(issue)
 
     issue["diff_preview"] = preview.diff
     issue["is_applicable"] = preview.is_applicable
@@ -201,23 +221,11 @@ def apply_fix_by_id(issue_id: str) -> dict[str, Any]:
     if not issue:
         raise HTTPException(status_code=404, detail="Issue not found")
 
-    dummy_finding = Finding(
-        verdict=Verdict(issue.get("verdict", "CONFIRMED_DRIFT")),
-        confidence=float(issue.get("confidence", 1.0)),
-        source_file=issue.get("source_file", ""),
-        changed_symbol=issue.get("changed_symbol", ""),
-        doc_file=issue.get("doc_file", ""),
-        doc_start_line=int(issue.get("doc_start_line", 1)),
-        doc_end_line=int(issue.get("doc_end_line", 1)),
-        outdated_excerpt=issue.get("outdated_excerpt", ""),
-        explanation=issue.get("explanation", ""),
-        suggested_fix=issue.get("suggested_fix", ""),
-    )
-    preview = generate_fix_preview(PROJECT_ROOT, dummy_finding)
+    preview = _preview_for_issue(issue)
     if not preview.is_applicable:
-        raise HTTPException(status_code=400, detail="Cannot apply patch to documentation")
+        raise HTTPException(status_code=400, detail=preview.error_message or "Cannot apply patch to documentation")
 
-    applied = apply_fix(PROJECT_ROOT, preview)
+    applied = apply_fix(repo_dir(issue.get("repo_id", "")), preview)
     if applied:
         mark_issue_fixed(issue_id)
 
@@ -235,19 +243,7 @@ def get_autofix_proposals() -> list[dict[str, Any]]:
     open_issues = get_all_issues(status="open")
     proposals = []
     for issue in open_issues:
-        dummy_finding = Finding(
-            verdict=Verdict(issue.get("verdict", "CONFIRMED_DRIFT")),
-            confidence=float(issue.get("confidence", 1.0)),
-            source_file=issue.get("source_file", ""),
-            changed_symbol=issue.get("changed_symbol", ""),
-            doc_file=issue.get("doc_file", ""),
-            doc_start_line=int(issue.get("doc_start_line", 1)),
-            doc_end_line=int(issue.get("doc_end_line", 1)),
-            outdated_excerpt=issue.get("outdated_excerpt", ""),
-            explanation=issue.get("explanation", ""),
-            suggested_fix=issue.get("suggested_fix", ""),
-        )
-        preview = generate_fix_preview(PROJECT_ROOT, dummy_finding)
+        preview = _preview_for_issue(issue)
         proposals.append(
             {
                 "issue_id": issue["id"],
@@ -274,8 +270,7 @@ def get_settings() -> dict[str, Any]:
         "system": {
             "github_token_configured": bool(os.getenv("GITHUB_TOKEN")),
             "github_webhook_secret_configured": bool(os.getenv("GITHUB_WEBHOOK_SECRET")),
-            "gemini_api_key_configured": bool(os.getenv("GEMINI_API_KEY")),
-            "openai_api_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+            **model_status(),
             "environment": os.getenv("ENV", "development"),
         },
     }
@@ -291,17 +286,33 @@ def update_settings(req: SettingsUpdateRequest) -> dict[str, Any]:
 @app.post("/api/scan/live")
 def run_live_scan(req: ScanRequest) -> dict[str, Any]:
     report_id = f"report-{uuid.uuid4().hex[:8]}"
+    repo_id = req.repo_id or local_repo_id()
+    if not repository_exists(repo_id):
+        raise HTTPException(status_code=404, detail=f"Unknown repository: {repo_id}")
+
+    root = repo_dir(repo_id)
     try:
-        scan = run_analysis(repo_root=PROJECT_ROOT, base_ref=req.base_ref, head_ref=req.head_ref)
+        base_ref, head_ref = resolve_refs(root, repo_id, req.base_ref, req.head_ref, req.pr_number)
+    except RepoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        scan = run_analysis(
+            repo_root=root,
+            base_ref=base_ref,
+            head_ref=head_ref,
+            audit=req.audit,
+            confidence_threshold=float(get_settings_data().get("confidence_threshold", 0.0)),
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Scan failed: {exc}")
 
     findings_data = [f.to_dict() for f in scan.findings]
     save_scan_report(
         report_id=report_id,
-        repo_id=req.repo_id,
-        base_sha=req.base_ref,
-        head_sha=req.head_ref,
+        repo_id=repo_id,
+        base_sha=base_ref,
+        head_sha=head_ref,
         pr_number=req.pr_number,
         total_drifts=scan.total_drifts,
         confirmed_drifts=scan.confirmed_drifts,
@@ -312,8 +323,10 @@ def run_live_scan(req: ScanRequest) -> dict[str, Any]:
 
     return {
         "report_id": report_id,
-        "base_ref": req.base_ref,
-        "head_ref": req.head_ref,
+        "repo_id": repo_id,
+        "base_ref": base_ref,
+        "head_ref": head_ref,
+        "changes_checked": len(scan.code_changes),
         "total_drifts": scan.total_drifts,
         "confirmed_drifts": scan.confirmed_drifts,
         "possible_drifts": scan.possible_drifts,
@@ -337,7 +350,7 @@ def preview_fix(req: AutoFixRequest) -> dict[str, Any]:
         explanation="Auto-fix preview",
         suggested_fix=req.suggested_fix,
     )
-    preview = generate_fix_preview(PROJECT_ROOT, dummy_finding)
+    preview = generate_fix_preview(repo_dir(req.repo_id or local_repo_id()), dummy_finding)
     return {
         "doc_file": preview.file_path,
         "is_applicable": preview.is_applicable,
@@ -361,11 +374,12 @@ def apply_approved_fix(req: AutoFixRequest) -> dict[str, Any]:
         explanation="Applying approved fix",
         suggested_fix=req.suggested_fix,
     )
-    preview = generate_fix_preview(PROJECT_ROOT, dummy_finding)
+    root = repo_dir(req.repo_id or local_repo_id())
+    preview = generate_fix_preview(root, dummy_finding)
     if not preview.is_applicable:
         raise HTTPException(status_code=400, detail=preview.error_message or "Fix cannot be applied")
 
-    success = apply_fix(PROJECT_ROOT, preview)
+    success = apply_fix(root, preview)
     if success and req.issue_id:
         mark_issue_fixed(req.issue_id)
 

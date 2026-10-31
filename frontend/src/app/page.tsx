@@ -12,16 +12,15 @@ import {
   FileText,
   Wand2,
   RefreshCw,
-  Check,
 } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { GithubIcon } from '@/components/GithubIcon';
-import { getOverview, getRepositories, triggerLiveScan, OverviewData, Repository } from '@/lib/api';
+import { describeScan, getOverview, getRepositories, getSelectedRepo, triggerLiveScan, OverviewData, Repository } from '@/lib/api';
 
 export default function OverviewPage() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [repositories, setRepositories] = useState<Repository[]>([]);
-  const [selectedRepoId, setSelectedRepoId] = useState<string>('krishgarg-code/JavaBasicPrograms1');
+  const [selectedRepoId, setSelectedRepoId] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [auditing, setAuditing] = useState(false);
   const [auditMessage, setAuditMessage] = useState<string | null>(null);
@@ -35,9 +34,8 @@ export default function OverviewPage() {
       ]);
       setOverview(ovData);
       setRepositories(repoData);
-      if (repoData.length > 0 && !selectedRepoId) {
-        setSelectedRepoId(repoData[0].id);
-      }
+      const saved = getSelectedRepo();
+      setSelectedRepoId(repoData.find((r) => r.id === saved)?.id ?? repoData[0]?.id ?? '');
     } catch (err) {
       console.error('Failed to load overview data:', err);
     } finally {
@@ -52,13 +50,13 @@ export default function OverviewPage() {
   const handleRunAudit = async () => {
     try {
       setAuditing(true);
-      setAuditMessage('Auditing...');
-      await triggerLiveScan('HEAD~1', 'HEAD');
-      setAuditMessage('Audit complete');
+      setAuditMessage('Scanning...');
+      const result = await triggerLiveScan();
+      setAuditMessage(describeScan(result, 'the last commit'));
       await loadAllData();
       setTimeout(() => setAuditMessage(null), 3000);
     } catch (err) {
-      setAuditMessage('Audit failed');
+      setAuditMessage(err instanceof Error ? err.message : 'Scan failed');
       setTimeout(() => setAuditMessage(null), 3000);
     } finally {
       setAuditing(false);
@@ -68,17 +66,19 @@ export default function OverviewPage() {
   const selectedRepo =
     repositories.find((r) => r.id === selectedRepoId) ||
     repositories[0] || {
-      id: 'krishgarg-code/JavaBasicPrograms1',
-      full_name: 'krishgarg-code/JavaBasicPrograms1',
+      id: '',
+      full_name: 'No repository',
       default_branch: 'main',
       health_score: 100.0,
-      last_scanned_at: new Date().toISOString(),
+      last_scanned_at: '',
     };
 
-  const healthScore = Math.round(selectedRepo?.health_score ?? overview?.avg_health_score ?? 100);
   const activeDrifts = overview?.total_active_drifts ?? 0;
-  const isHealthy = activeDrifts === 0 && healthScore >= 90;
-  const patchesApplied = overview?.resolved_drifts ?? 12;
+  const isHealthy = activeDrifts === 0;
+  // Once every issue is fixed, the score from the last scan no longer applies.
+  const healthScore = isHealthy ? 100 : Math.round(selectedRepo?.health_score ?? 100);
+  const openIssues = overview?.recent_issues ?? [];
+  const patchesApplied = overview?.resolved_drifts ?? 0;
 
   return (
     <>
@@ -118,7 +118,11 @@ export default function OverviewPage() {
                       <span className="text-zinc-300">{selectedRepo.default_branch}</span>
                     </span>
                     <span>&bull;</span>
-                    <span>Monitored via GitHub Actions</span>
+                    <span>
+                      {selectedRepo.last_scanned_at
+                        ? `Scanned ${new Date(selectedRepo.last_scanned_at).toLocaleString()}`
+                        : 'Not scanned yet'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -181,7 +185,7 @@ export default function OverviewPage() {
                 </span>
               </div>
               <p className="text-xs text-zinc-500 font-mono mt-2">
-                Automated fixes merged
+                Fixes applied from this dashboard
               </p>
             </div>
 
@@ -212,7 +216,7 @@ export default function OverviewPage() {
           <div className="pt-4 border-t border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
             <span className="text-zinc-400">
               {isHealthy
-                ? 'All constants, defaults, and signatures match markdown documentation.'
+                ? 'No open documentation drift from the changes scanned so far.'
                 : 'Documentation drift detected between code changes and markdown files.'}
             </span>
 
@@ -223,7 +227,7 @@ export default function OverviewPage() {
                 className="flex items-center space-x-2 bg-white hover:bg-zinc-200 text-black px-4 py-2 rounded-lg font-semibold transition disabled:opacity-50 shadow-sm"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${auditing ? 'animate-spin' : ''}`} />
-                <span>{auditing ? 'Auditing...' : auditMessage || 'Run Audit'}</span>
+                <span>{auditing ? 'Scanning...' : auditMessage || 'Scan Last Commit'}</span>
               </button>
 
               <Link
@@ -247,40 +251,33 @@ export default function OverviewPage() {
               </div>
               <div>
                 <h3 className="text-xs font-semibold text-white uppercase tracking-wider font-mono">
-                  Documentation Health
+                  Open Drift
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  Coverage of code symbols across repository markdown
+                  Sentences that need attention, across all repositories
                 </p>
               </div>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex justify-between items-center text-xs font-mono">
-                <span className="text-zinc-400">Tracked Documentation</span>
-                <span className="text-white font-medium">2 Markdown Files</span>
-              </div>
-              <div className="bg-black p-3 rounded-lg border border-border space-y-2 text-xs font-mono">
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-300">README.md</span>
-                  <span className="text-emerald-400 flex items-center space-x-1">
-                    <Check className="w-3 h-3" />
-                    <span>In Sync</span>
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-300">docs/configuration.md</span>
-                  <span className="text-emerald-400 flex items-center space-x-1">
-                    <Check className="w-3 h-3" />
-                    <span>In Sync</span>
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex justify-between items-center text-xs font-mono pt-1 text-zinc-400">
-                <span>Verified Symbols:</span>
-                <span className="text-zinc-300">TIMEOUT_SECONDS, MAX_RETRIES</span>
-              </div>
+            <div className="space-y-2 text-xs font-mono">
+              {openIssues.length === 0 ? (
+                <p className="bg-black p-3 rounded-lg border border-border text-zinc-400">
+                  No open issues. Scan a commit or pull request to check it.
+                </p>
+              ) : (
+                openIssues.map((issue) => (
+                  <Link
+                    key={issue.id}
+                    href={`/issues/${issue.id}`}
+                    className="bg-black p-3 rounded-lg border border-border flex items-center justify-between gap-3 hover:border-zinc-700 transition"
+                  >
+                    <span className="text-zinc-300 truncate">
+                      {issue.doc_file}:{issue.doc_start_line}
+                    </span>
+                    <span className="text-red-400 shrink-0">{issue.changed_symbol}</span>
+                  </Link>
+                ))
+              )}
             </div>
           </div>
 
@@ -308,10 +305,10 @@ export default function OverviewPage() {
 
               <div className="bg-black p-3 rounded-lg border border-border space-y-1.5 text-xs text-zinc-400">
                 <p>
-                  Deterministic AST patches calculated and applied without breaking documentation formatting.
+                  Each fix replaces one sentence in the local copy of the docs, and you see the diff first.
                 </p>
                 <p className="text-zinc-500 text-[11px]">
-                  All patches require human review prior to Git commit.
+                  Nothing is committed or pushed for you.
                 </p>
               </div>
 
@@ -374,11 +371,6 @@ export default function OverviewPage() {
                           <GitBranch className="w-3 h-3 text-zinc-500" />
                           <span>{repo.default_branch}</span>
                         </span>
-                        <span>&bull;</span>
-                        <span className="text-emerald-400 flex items-center space-x-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-                          <span>Active CI Runner</span>
-                        </span>
                       </div>
                     </div>
                   </div>
@@ -397,13 +389,6 @@ export default function OverviewPage() {
                       </span>
                     </div>
 
-                    <button
-                      onClick={handleRunAudit}
-                      disabled={auditing}
-                      className="text-xs font-mono font-medium bg-black hover:bg-zinc-900 border border-border text-zinc-300 hover:text-white px-3.5 py-1.5 rounded-lg transition disabled:opacity-50"
-                    >
-                      Audit
-                    </button>
                   </div>
                 </div>
               );

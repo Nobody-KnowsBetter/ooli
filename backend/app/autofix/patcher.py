@@ -22,7 +22,18 @@ class FixPreview:
 
 def generate_fix_preview(repo_root: Path, finding: Finding) -> FixPreview:
     """Generates a side-by-side before-and-after diff for a documentation fix."""
-    target_path = repo_root / finding.doc_file
+    target_path = (repo_root / finding.doc_file).resolve()
+    if not target_path.is_relative_to(repo_root.resolve()) or target_path.suffix.lower() not in {".md", ".rst"}:
+        return FixPreview(
+            finding=finding,
+            file_path=finding.doc_file,
+            original_text="",
+            updated_text="",
+            diff="",
+            is_applicable=False,
+            error_message="Fixes can only change Markdown or reStructuredText files inside the repository",
+        )
+
     if not target_path.exists():
         return FixPreview(
             finding=finding,
@@ -83,7 +94,8 @@ def generate_fix_preview(repo_root: Path, finding: Finding) -> FixPreview:
         original_text=original_content,
         updated_text=updated_content,
         diff="".join(diff_lines),
-        is_applicable=True,
+        is_applicable=bool(diff_lines),
+        error_message=None if diff_lines else "The sentence is no longer in this file",
     )
 
 

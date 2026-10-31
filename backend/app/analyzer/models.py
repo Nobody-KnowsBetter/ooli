@@ -26,6 +26,9 @@ class ChangeType(str, Enum):
     API_ENDPOINT_ADDED = "API_ENDPOINT_ADDED"
     CLASS_CHANGED = "CLASS_CHANGED"
     ENV_VAR_CHANGED = "ENV_VAR_CHANGED"
+    FLAG_RENAMED = "FLAG_RENAMED"
+    FLAG_REMOVED = "FLAG_REMOVED"
+    FLAG_DEFAULT_CHANGED = "FLAG_DEFAULT_CHANGED"
     OTHER = "OTHER"
 
 
@@ -75,6 +78,7 @@ class Finding:
     change_type: ChangeType = ChangeType.OTHER
     code_diff: str = ""
     evidence: list[str] = field(default_factory=list)
+    engine: str = "heuristic"  # What reached this verdict: "heuristic" or the model name.
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,5 +95,6 @@ class Finding:
             "change_type": self.change_type.value,
             "code_diff": self.code_diff,
             "evidence": self.evidence,
+            "engine": self.engine,
         }
 

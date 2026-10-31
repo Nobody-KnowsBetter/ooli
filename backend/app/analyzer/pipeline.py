@@ -7,11 +7,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from backend.app.ai.intelligence import get_ai_provider
+from backend.app.ai.intelligence import HeuristicAIProvider, get_ai_provider
 from backend.app.analyzer.ast_analyzer import compare_python_ast, parse_python_ast
-from backend.app.analyzer.doc_chunker import load_and_chunk_docs
+from backend.app.analyzer.doc_chunker import load_docs_at_ref
 from backend.app.analyzer.doc_mapper import map_changes_to_docs
 from backend.app.analyzer.models import ChangeType, CodeChange, DocSection, Finding, Verdict
+
+
+# Local models are slow, so only the most relevant candidates reach Qwen.
+MAX_MODEL_CALLS = 8
+
+# Sentences about the past are allowed to mention old values.
+HISTORICAL_RE = re.compile(
+    r"\b(before|prior to|previously|formerly|used to|until|deprecated|no longer|was (renamed|changed|replaced))\b",
+    re.IGNORECASE,
+)
+TEST_FILE_RE = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$|conftest\.py$)")
+
+
+def is_user_facing(change: CodeChange) -> bool:
+    """Private names and tests aren't documented for users, so changes to them can't cause drift."""
+    if TEST_FILE_RE.search(change.file_path):
+        return False
+    return not change.symbol_name.split(".")[-1].startswith("_")
 
 
 def run_git_cmd(*args: str, cwd: Optional[Path] = None) -> str:
@@ -109,7 +127,7 @@ class ScanResult:
 
         lines += [
             "",
-            "💡 *Run `python src/docguard.py --autofix` or approve suggestions in the DocGuard Dashboard to apply fixes.*",
+            "💡 *Run `python backend/src/docguard.py --autofix` or approve suggestions in the DocGuard Dashboard to apply fixes.*",
         ]
         return "\n".join(lines) + "\n"
 
@@ -182,7 +200,8 @@ def run_analysis(
     repo_root: Path,
     base_ref: str,
     head_ref: str,
-    doc_files: Optional[list[str]] = None,
+    audit: bool = False,
+    confidence_threshold: float = 0.0,
 ) -> ScanResult:
     """Executes full DocGuard pipeline on git repository between base_ref and head_ref."""
     # 1. Get changed files
@@ -196,12 +215,10 @@ def run_analysis(
             names = []
 
     all_changes: list[CodeChange] = []
-    py_changed = False
 
     for fn in names:
         if not fn.endswith(".py"):
             continue
-        py_changed = True
         try:
             old_src = run_git_cmd("show", f"{base_ref}:{fn}", cwd=repo_root)
         except Exception:
@@ -214,27 +231,42 @@ def run_analysis(
         file_changes = compare_python_ast(fn, old_src, new_src)
         all_changes.extend(file_changes)
 
-    # 2. Load and chunk documentation
-    doc_sections = load_and_chunk_docs(repo_root, doc_files=doc_files)
+    all_changes = [c for c in all_changes if is_user_facing(c)]
 
-    # 3. Map changes to doc candidates
-    candidates = map_changes_to_docs(all_changes, doc_sections)
+    # 2. Load documentation as it is at the head commit, including the PR's own doc edits
+    doc_sections = load_docs_at_ref(repo_root, head_ref)
 
-    # 4. AI / Heuristic Semantic Evaluation
+    # 3. Map changes to doc candidates, most relevant first
+    candidates = sorted(
+        map_changes_to_docs(all_changes, doc_sections),
+        key=lambda pair: pair.relevance_score,
+        reverse=True,
+    )
+
+    # 4. Decide each candidate
     ai_provider = get_ai_provider()
+    heuristic = HeuristicAIProvider()
     findings: list[Finding] = []
-    for cand in candidates:
-        finding = ai_provider.evaluate(cand)
+    seen: set[tuple[str, int, str]] = set()
+    for index, cand in enumerate(candidates):
+        provider = ai_provider if index < MAX_MODEL_CALLS else heuristic
+        finding = provider.evaluate(cand)
+
+        if HISTORICAL_RE.search(finding.outdated_excerpt):
+            continue
+        if finding.verdict == Verdict.CONFIRMED_DRIFT and finding.confidence < confidence_threshold:
+            finding.verdict = Verdict.POSSIBLE_DRIFT
+
+        key = (finding.doc_file, finding.doc_start_line, finding.changed_symbol)
+        if finding.verdict != Verdict.NO_DRIFT_DETECTED and key in seen:
+            continue
+        seen.add(key)
         findings.append(finding)
 
-    # 5. If no findings detected from commit diffs (e.g. documentation was changed in PR,
-    # or no code changes in commit range, or checking repository health):
-    # Run full repository audit to ensure existing drifts are never hidden!
-    if not any(f.verdict == Verdict.CONFIRMED_DRIFT for f in findings):
-        audit_findings = audit_repository_drift(repo_root, doc_sections)
-        # Avoid duplicate symbols if already flagged
+    # 5. A PR is only told about what it broke. The whole-repository check is a separate, explicit request.
+    if audit:
         existing_symbols = {f.changed_symbol for f in findings}
-        for af in audit_findings:
+        for af in audit_repository_drift(repo_root, doc_sections):
             if af.changed_symbol not in existing_symbols:
                 findings.append(af)
 

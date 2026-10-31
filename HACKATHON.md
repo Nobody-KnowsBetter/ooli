@@ -13,5 +13,4 @@ Binary Bandits
 Problem 5: Automated Documentation Drift Detection
 
 ## Models we use and why
-- Qwen 2.5 Coder 7B: Analyzes code changes in PR diffs, extracts modified API signatures, configuration defaults, and parameters, and verifies associated documentation prose to identify outdated explanations and drifted references. Runs locally via Ollama.
-
+- Qwen 2.5 Coder 3B: Decides whether a documentation sentence that has a changed setting's old value but doesn't name the setting (for example "Requests give up after 30 seconds") is really about that setting or only a coincidence. Exact matches are decided by rules, so the model only answers this one question. Small enough to run on a laptop: about 2 GB of memory, locally via Ollama.

@@ -99,7 +99,7 @@ def main() -> int:
         from backend.app.analyzer.pipeline import run_analysis
         from backend.app.autofix.patcher import apply_fix, generate_fix_preview
 
-        scan = run_analysis(repo_root=PROJECT_ROOT, base_ref=args.base, head_ref=args.head)
+        scan = run_analysis(repo_root=PROJECT_ROOT, base_ref=args.base, head_ref=args.head, audit=args.audit)
         report_content = scan.generate_markdown_report()
         Path(args.report).write_text(report_content, encoding="utf-8")
         print(report_content)

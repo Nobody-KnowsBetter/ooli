@@ -17,4 +17,5 @@ dev = ["pytest>=8"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "backend/tests"]
+pythonpath = ["."]

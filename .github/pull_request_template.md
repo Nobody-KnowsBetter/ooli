@@ -8,7 +8,7 @@
 
 ## Models used in project
 <!-- Every AI model the project uses in this PR. Keep this in sync with HACKATHON.md. -->
-Qwen 2.5 Coder 7B
+Qwen 2.5 Coder 3B
 
 ## Checklist
 - [ ] CI passes

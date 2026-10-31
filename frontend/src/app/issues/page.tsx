@@ -59,7 +59,7 @@ export default function IssuesPage() {
               { id: 'open', label: 'Active Drift' },
               { id: 'confirmed', label: 'Confirmed' },
               { id: 'possible', label: 'Possible' },
-              { id: 'fixed', label: 'Resolved (12)' },
+              { id: 'fixed', label: 'Resolved' },
               { id: 'all', label: 'All Recorded' },
             ].map((tab) => (
               <button
@@ -112,7 +112,7 @@ export default function IssuesPage() {
                   onClick={() => setFilter('fixed')}
                   className="text-xs font-mono text-zinc-300 hover:text-white underline"
                 >
-                  View 12 previously resolved and patched drifts &rarr;
+                  View previously resolved and patched drifts &rarr;
                 </button>
               </div>
             )}
