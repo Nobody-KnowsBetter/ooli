@@ -8,6 +8,7 @@ import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 # Ensure project root is in sys.path regardless of execution directory
