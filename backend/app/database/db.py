@@ -87,10 +87,30 @@ def init_db() -> None:
     """
     )
 
-    # Databases created before the engine column existed
-    columns = {row["name"] for row in cursor.execute("PRAGMA table_info(findings)")}
-    if "engine" not in columns:
-        cursor.execute("ALTER TABLE findings ADD COLUMN engine TEXT DEFAULT 'heuristic'")
+    # Which signed-in maintainer can see which repositories.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_repositories (
+            login TEXT NOT NULL,
+            repo_id TEXT NOT NULL,
+            PRIMARY KEY (login, repo_id)
+        );
+    """
+    )
+
+    # Columns added since the first version, for databases that already exist
+    for table, column, definition in [
+        ("findings", "engine", "TEXT DEFAULT 'heuristic'"),
+        ("scan_reports", "pr_title", "TEXT"),
+        ("repositories", "description", "TEXT DEFAULT ''"),
+        ("repositories", "language", "TEXT DEFAULT ''"),
+        ("repositories", "is_private", "INTEGER DEFAULT 0"),
+        ("repositories", "pushed_at", "TEXT DEFAULT ''"),
+        ("repositories", "open_prs", "INTEGER DEFAULT 0"),
+    ]:
+        columns = {row["name"] for row in cursor.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     # This checkout is always available to scan.
     cursor.execute(
@@ -127,6 +147,7 @@ def save_scan_report(
     possible_drifts: int,
     health_score: float,
     findings: list[dict[str, Any]],
+    pr_title: Optional[str] = None,
 ) -> None:
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -134,8 +155,8 @@ def save_scan_report(
 
     cursor.execute(
         """
-        INSERT INTO scan_reports (id, repo_id, base_sha, head_sha, pr_number, status, total_drifts, confirmed_drifts, possible_drifts, health_score, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scan_reports (id, repo_id, base_sha, head_sha, pr_number, pr_title, status, total_drifts, confirmed_drifts, possible_drifts, health_score, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             report_id,
@@ -143,6 +164,7 @@ def save_scan_report(
             base_sha,
             head_sha,
             pr_number,
+            pr_title,
             "COMPLETED",
             total_drifts,
             confirmed_drifts,
@@ -160,6 +182,18 @@ def save_scan_report(
     """,
         (health_score, now, repo_id),
     )
+
+    # A new scan of a pull request replaces the last one, so a sentence fixed in the PR gets resolved.
+    if pr_number is not None:
+        cursor.execute(
+            """
+            UPDATE findings SET is_fixed = 1
+            WHERE is_fixed = 0 AND report_id IN (
+                SELECT id FROM scan_reports WHERE repo_id = ? AND pr_number = ? AND id != ?
+            )
+        """,
+            (repo_id, pr_number, report_id),
+        )
 
     # Only save actual drift findings (CONFIRMED_DRIFT or POSSIBLE_DRIFT)
     drift_findings = [
@@ -226,17 +260,120 @@ def repository_exists(repo_id: str) -> bool:
     return row is not None
 
 
-def get_all_issues(status: Optional[str] = None, verdict: Optional[str] = None) -> list[dict[str, Any]]:
+def sync_user_repositories(login: str, repos: list[dict[str, Any]]) -> None:
+    """Makes our copy of a maintainer's repository list match GitHub's."""
+    conn = get_db_connection()
+    for repo in repos:
+        conn.execute(
+            """
+            INSERT INTO repositories (id, full_name, default_branch, description, language, is_private, pushed_at)
+            VALUES (:full_name, :full_name, :default_branch, :description, :language, :private, :pushed_at)
+            ON CONFLICT(id) DO UPDATE SET
+                default_branch = excluded.default_branch,
+                description = excluded.description,
+                language = excluded.language,
+                is_private = excluded.is_private,
+                pushed_at = excluded.pushed_at
+        """,
+            repo,
+        )
+    conn.execute("DELETE FROM user_repositories WHERE login = ?", (login,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO user_repositories (login, repo_id) VALUES (?, ?)",
+        [(login, repo["full_name"]) for repo in repos],
+    )
+    conn.commit()
+    conn.close()
+
+
+def link_user_repository(login: str, repo_id: str) -> None:
+    conn = get_db_connection()
+    conn.execute("INSERT OR IGNORE INTO user_repositories (login, repo_id) VALUES (?, ?)", (login, repo_id))
+    conn.commit()
+    conn.close()
+
+
+def user_repo_ids(login: str) -> set[str]:
+    conn = get_db_connection()
+    rows = conn.execute("SELECT repo_id FROM user_repositories WHERE login = ?", (login,)).fetchall()
+    conn.close()
+    return {row["repo_id"] for row in rows}
+
+
+def get_user_repositories(login: str) -> list[dict[str, Any]]:
+    """A maintainer's repositories: those needing attention first, then the most recently pushed."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT rp.*,
+            (SELECT COUNT(*) FROM findings f JOIN scan_reports s ON f.report_id = s.id
+             WHERE s.repo_id = rp.id AND f.is_fixed = 0) AS open_issues,
+            (SELECT COUNT(DISTINCT s.pr_number) FROM scan_reports s WHERE s.repo_id = rp.id) AS prs_checked
+        FROM repositories rp
+        JOIN user_repositories u ON u.repo_id = rp.id
+        WHERE u.login = ?
+        ORDER BY open_issues DESC, rp.pushed_at DESC
+    """,
+        (login,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def set_open_prs(repo_id: str, count: int) -> None:
+    conn = get_db_connection()
+    conn.execute("UPDATE repositories SET open_prs = ? WHERE id = ?", (count, repo_id))
+    conn.commit()
+    conn.close()
+
+
+def pr_already_scanned(repo_id: str, pr_number: int, head_sha: str) -> bool:
+    conn = get_db_connection()
+    row = conn.execute(
+        "SELECT 1 FROM scan_reports WHERE repo_id = ? AND pr_number = ? AND head_sha = ? LIMIT 1",
+        (repo_id, pr_number, head_sha),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def _repo_filter(column: str, repo_ids: Optional[set[str]]) -> tuple[str, list[str]]:
+    """SQL limiting a query to one user's repositories. None means login is off, so no limit."""
+    if repo_ids is None:
+        return "", []
+    marks = ",".join("?" for _ in repo_ids) or "NULL"
+    return f" AND {column} IN ({marks})", list(repo_ids)
+
+
+def get_reports(repo_ids: Optional[set[str]] = None) -> list[dict[str, Any]]:
+    where, params = _repo_filter("repo_id", repo_ids)
+    conn = get_db_connection()
+    rows = conn.execute(
+        f"SELECT * FROM scan_reports WHERE 1 = 1{where} ORDER BY created_at DESC LIMIT 20", params
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_issues(
+    status: Optional[str] = None,
+    verdict: Optional[str] = None,
+    repo_ids: Optional[set[str]] = None,
+) -> list[dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
 
     query = """
-        SELECT f.*, r.created_at, r.repo_id, r.pr_number
+        SELECT f.*, r.created_at, r.repo_id, r.pr_number, r.pr_title, r.head_sha, rp.default_branch
         FROM findings f
         JOIN scan_reports r ON f.report_id = r.id
+        LEFT JOIN repositories rp ON rp.id = r.repo_id
         WHERE f.verdict IN ('CONFIRMED_DRIFT', 'POSSIBLE_DRIFT')
     """
     params: list[Any] = []
+    repo_sql, repo_params = _repo_filter("r.repo_id", repo_ids)
+    query += repo_sql
+    params += repo_params
 
     if status == "open":
         query += " AND f.is_fixed = 0"
@@ -268,9 +405,10 @@ def get_issue_by_id(issue_id: str) -> Optional[dict[str, Any]]:
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT f.*, r.created_at, r.repo_id, r.pr_number, r.base_sha, r.head_sha
+        SELECT f.*, r.created_at, r.repo_id, r.pr_number, r.pr_title, r.base_sha, r.head_sha, rp.default_branch
         FROM findings f
         JOIN scan_reports r ON f.report_id = r.id
+        LEFT JOIN repositories rp ON rp.id = r.repo_id
         WHERE f.id = ?
     """,
         (issue_id,),
@@ -297,34 +435,48 @@ def mark_issue_fixed(issue_id: str) -> bool:
     return success
 
 
-def get_overview_data() -> dict[str, Any]:
+def get_overview_data(repo_ids: Optional[set[str]] = None) -> dict[str, Any]:
     conn = get_db_connection()
     cursor = conn.cursor()
+    repo_where, repo_params = _repo_filter("id", repo_ids)
+    report_where, report_params = _repo_filter("repo_id", repo_ids)
+    joined_where, joined_params = _repo_filter("r.repo_id", repo_ids)
 
-    cursor.execute("SELECT COUNT(*), AVG(health_score) FROM repositories")
+    cursor.execute(f"SELECT COUNT(*), AVG(health_score) FROM repositories WHERE 1 = 1{repo_where}", repo_params)
     repo_count, avg_health = cursor.fetchone()
 
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE is_fixed = 0 AND verdict = 'CONFIRMED_DRIFT'")
-    confirmed_count = cursor.fetchone()[0]
+    def count_findings(condition: str) -> int:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM findings f JOIN scan_reports r ON f.report_id = r.id WHERE {condition}{joined_where}",
+            joined_params,
+        )
+        return cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE is_fixed = 0 AND verdict = 'POSSIBLE_DRIFT'")
-    possible_count = cursor.fetchone()[0]
+    confirmed_count = count_findings("f.is_fixed = 0 AND f.verdict = 'CONFIRMED_DRIFT'")
+    possible_count = count_findings("f.is_fixed = 0 AND f.verdict = 'POSSIBLE_DRIFT'")
+    fixed_count = count_findings("f.is_fixed = 1")
 
-    cursor.execute("SELECT COUNT(*) FROM findings WHERE is_fixed = 1")
-    fixed_count = cursor.fetchone()[0]
+    cursor.execute(
+        f"SELECT COUNT(DISTINCT repo_id || '#' || pr_number) FROM scan_reports WHERE pr_number IS NOT NULL{report_where}",
+        report_params,
+    )
+    prs_checked = cursor.fetchone()[0]
 
-    cursor.execute("SELECT * FROM scan_reports ORDER BY created_at DESC LIMIT 5")
+    cursor.execute(
+        f"SELECT * FROM scan_reports WHERE 1 = 1{report_where} ORDER BY created_at DESC LIMIT 5", report_params
+    )
     recent_reports = [dict(r) for r in cursor.fetchall()]
 
     cursor.execute(
-        """
-        SELECT f.*, r.repo_id, r.created_at
+        f"""
+        SELECT f.*, r.repo_id, r.pr_number, r.created_at
         FROM findings f
         JOIN scan_reports r ON f.report_id = r.id
-        WHERE f.is_fixed = 0 AND f.verdict IN ('CONFIRMED_DRIFT', 'POSSIBLE_DRIFT')
+        WHERE f.is_fixed = 0 AND f.verdict IN ('CONFIRMED_DRIFT', 'POSSIBLE_DRIFT'){joined_where}
         ORDER BY r.created_at DESC
         LIMIT 6
-    """
+    """,
+        joined_params,
     )
     recent_issues = []
     for r in cursor.fetchall():
@@ -338,12 +490,13 @@ def get_overview_data() -> dict[str, Any]:
     conn.close()
 
     return {
-        "repository_count": repo_count or 1,
+        "repository_count": repo_count or 0,
         "avg_health_score": round(avg_health if avg_health is not None else 100.0, 1),
         "total_active_drifts": confirmed_count + possible_count,
         "confirmed_drifts": confirmed_count,
         "possible_drifts": possible_count,
         "resolved_drifts": fixed_count,
+        "prs_checked": prs_checked,
         "recent_reports": recent_reports,
         "recent_issues": recent_issues,
     }

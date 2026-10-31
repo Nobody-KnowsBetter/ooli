@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app import github_auth, repos
+from backend.app import github_auth, repos, sync
 from backend.app.main import app
 
 
@@ -16,6 +16,7 @@ def client(monkeypatch):
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
     monkeypatch.setenv("APP_URL", "http://localhost:3000")
     github_auth.sessions.clear()
+    sync.repo_list_synced_at.clear()
     return TestClient(app, base_url="http://localhost:3000", follow_redirects=False)
 
 
@@ -106,7 +107,8 @@ def test_declined_login_returns_to_the_landing_page(client):
 def test_logout_ends_the_session(client, monkeypatch):
     fake_github(monkeypatch)
     log_in(client)
-    client.post("/api/auth/logout")
+    res = client.post("/api/auth/logout")
+    assert "docguard_session" in res.headers["set-cookie"] and "Max-Age=0" in res.headers["set-cookie"]
     assert client.get("/api/repositories").status_code == 401
 
 
@@ -118,8 +120,8 @@ def test_lists_repositories_across_pages(client, monkeypatch):
     first = [repo_json(f"octo/r{i}") for i in range(100)]
     fake_github(monkeypatch, repo_pages=[first, [repo_json("octo/last")]])
     log_in(client)
-    names = [r["full_name"] for r in client.get("/api/github/repos").json()]
-    assert len(names) == 101 and names[-1] == "octo/last"
+    names = [r["full_name"] for r in client.get("/api/repositories").json()]
+    assert len(names) == 101 and "octo/last" in names
 
 
 def test_lists_pull_requests_with_merged_state(client, monkeypatch):
@@ -134,7 +136,7 @@ def test_lists_pull_requests_with_merged_state(client, monkeypatch):
 def test_expired_github_token_says_so(client, monkeypatch):
     fake_github(monkeypatch, status=401)
     log_in(client)
-    res = client.get("/api/github/repos")
+    res = client.get("/api/repositories")
     assert res.status_code == 401 and "expired" in res.json()["detail"]
 
 
@@ -155,3 +157,15 @@ def test_token_never_reaches_the_clones_git_config(tmp_path, monkeypatch):
     assert "secret-token" not in " ".join(seen["cmd"])
     assert seen["env"]["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
     assert "secret-token" not in seen["env"]["GIT_CONFIG_VALUE_0"]
+
+
+def test_adding_the_env_file_turns_login_on_without_a_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "")
+    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "")
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(github_auth, "ENV_FILE", env_file)
+    monkeypatch.setattr(github_auth, "_env_loaded_at", 0.0)
+    assert github_auth.login_enabled() is False
+    env_file.write_text("GITHUB_CLIENT_ID=new-id\nGITHUB_CLIENT_SECRET=new-secret\n")
+    assert github_auth.login_enabled() is True
+    assert github_auth.client_id() == "new-id"

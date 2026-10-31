@@ -22,6 +22,7 @@ from backend.app.analyzer.doc_mapper import clean_value, contains_flag, contains
 
 DEFAULT_MODEL = "qwen2.5-coder:3b"
 MODEL_TIMEOUT_SECONDS = 180.0
+MAX_SENTENCES_PER_SECTION = 4
 
 
 class BaseAIProvider(ABC):
@@ -237,13 +238,53 @@ class QwenProvider(BaseAIProvider):
         if finding.verdict != Verdict.POSSIBLE_DRIFT:
             return finding
 
+        # Several sentences in a section can hold the old value, and only some may be about this setting.
+        old_value = clean_value(pair.change.old_value)
+        sentences = [
+            (pair.section.start_line + offset, line.strip())
+            for offset, line in enumerate(pair.section.content.splitlines())
+            if contains_value(old_value, line)
+        ]
+
+        for line_no, sentence in sentences[:MAX_SENTENCES_PER_SECTION]:
+            answer = self._describes_setting(pair, sentence)
+            if answer is None:  # The model failed, so this stays a "possible" for a person to judge.
+                return finding
+            finding.engine = model_name()
+            if answer:
+                new_value = clean_value(pair.change.new_value)
+                finding.verdict = Verdict.CONFIRMED_DRIFT
+                finding.confidence = 0.85
+                finding.doc_start_line = finding.doc_end_line = line_no
+                finding.outdated_excerpt = sentence
+                finding.suggested_fix = re.sub(
+                    rf"(?<![\w.]){re.escape(old_value)}(?!\w|\.\d)", new_value, sentence
+                )
+                finding.explanation = (
+                    f"'{pair.change.symbol_name}' changed from '{old_value}' to '{new_value}'. "
+                    f"{model_name()} confirmed this sentence is about that setting."
+                )
+                finding.evidence = [
+                    f"Source code: {pair.change.file_path}:{pair.change.line_number}",
+                    f"Diff: {pair.change.diff_hunk}",
+                    f"{model_name()}: this sentence describes {pair.change.symbol_name}",
+                ]
+                return finding
+
+        finding.verdict = Verdict.NO_DRIFT_DETECTED
+        finding.outdated_excerpt = ""
+        finding.suggested_fix = ""
+        return finding
+
+    def _describes_setting(self, pair: CandidatePair, sentence: str) -> bool | None:
+        """Asks the model. Returns None if it couldn't answer."""
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
             symbol_name=pair.change.symbol_name,
             file_path=pair.change.file_path,
             old_value=pair.change.old_value,
             new_value=pair.change.new_value,
             doc_title=pair.section.title,
-            sentence=finding.outdated_excerpt,
+            sentence=sentence,
         )
         try:
             resp = httpx.post(
@@ -262,22 +303,10 @@ class QwenProvider(BaseAIProvider):
                 timeout=MODEL_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
-            answer = json.loads(resp.json()["message"]["content"])["describes_setting"]
+            return json.loads(resp.json()["message"]["content"])["describes_setting"] is True
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             print(f"Qwen unavailable, keeping this as possible drift: {exc}", file=sys.stderr)
-            return finding
-
-        finding.engine = model_name()
-        if answer is True:
-            finding.verdict = Verdict.CONFIRMED_DRIFT
-            finding.confidence = 0.85
-            finding.explanation = (
-                f"{finding.explanation.split(', and this')[0]}. {model_name()} confirmed this sentence is about that setting."
-            )
-            finding.evidence.append(f"{model_name()}: this sentence describes {pair.change.symbol_name}")
-        else:
-            finding.verdict = Verdict.NO_DRIFT_DETECTED
-        return finding
+            return None
 
 
 def ollama_url() -> str:

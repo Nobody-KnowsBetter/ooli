@@ -11,6 +11,8 @@ const nextConfig = {
   },
   async rewrites() {
     return [
+      // The landing page is plain HTML in public/. The dashboard is at /dashboard.
+      { source: '/', destination: '/index.html' },
       {
         source: '/api/:path*',
         destination: `${BACKEND_URL}/api/:path*`,

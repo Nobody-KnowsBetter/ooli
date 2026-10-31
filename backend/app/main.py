@@ -33,16 +33,20 @@ from backend.app.database.db import (
     add_repository,
     get_all_issues,
     get_db_connection,
+    get_reports as get_visible_reports,
+    get_user_repositories,
+    link_user_repository,
+    user_repo_ids,
     get_issue_by_id,
     get_overview_data,
     get_settings_data,
     init_db,
     mark_issue_fixed,
     repository_exists,
-    save_scan_report,
     update_settings_data,
 )
-from backend.app.github_auth import current_session, login_enabled, router as github_router, token_for
+from backend.app.github_auth import current_session, login_enabled, router as github_router, sync_wanted, token_for
+from backend.app.sync import refresh_repo_list, scan_repository, start_background_sync, statuses
 from backend.app.repos import RepoError, clone_repo, local_repo_id, parse_repo_name, repo_dir, resolve_refs
 
 # Ensure database tables exist immediately
@@ -52,6 +56,7 @@ init_db()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     init_db()
+    start_background_sync()
     yield
 
 
@@ -126,6 +131,34 @@ class SettingsUpdateRequest(BaseModel):
     auto_comment: Optional[str] = None
 
 
+def visible_repos(request: Request) -> Optional[set[str]]:
+    """The repositories this user may see. None means login is off, so there's no limit."""
+    session = current_session(request)
+    if not login_enabled() or not session:
+        return None
+    return user_repo_ids(session.login)
+
+
+def require_repo_access(request: Request, repo_id: str) -> None:
+    allowed = visible_repos(request)
+    if allowed is not None and repo_id not in allowed:
+        raise HTTPException(status_code=404, detail=f"Unknown repository: {repo_id}")
+
+
+def _visible_issue(request: Request, issue_id: str) -> dict[str, Any]:
+    issue = get_issue_by_id(issue_id)
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    require_repo_access(request, issue.get("repo_id", ""))
+    return issue
+
+
+def _no_local_fixes_when_hosted() -> None:
+    # Signed-in users don't own this server's copy, so a fix there wouldn't reach their repository.
+    if login_enabled():
+        raise HTTPException(status_code=400, detail="Use Edit on GitHub to fix this in your repository")
+
+
 def _preview_for_issue(issue: dict[str, Any]) -> FixPreview:
     finding = Finding(
         verdict=Verdict(issue.get("verdict", "CONFIRMED_DRIFT")),
@@ -154,19 +187,41 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/overview")
-def get_overview() -> dict[str, Any]:
+def get_overview(request: Request) -> dict[str, Any]:
     """Overview metrics: repository count, health score, active issues, recent activity."""
-    return get_overview_data()
+    return get_overview_data(visible_repos(request))
 
 
 @app.get("/api/repositories")
-def get_repositories() -> list[dict[str, Any]]:
+def get_repositories(request: Request) -> list[dict[str, Any]]:
+    session = current_session(request)
+    if login_enabled() and session:
+        # The maintainer's own repositories from GitHub, so there's nothing to add by hand.
+        try:
+            refresh_repo_list(session)
+        except HTTPException as exc:
+            # If GitHub is only briefly unavailable and we have an older list, show that.
+            if exc.status_code == 401 or not user_repo_ids(session.login):
+                raise exc
+        return get_user_repositories(session.login)
+
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM repositories ORDER BY health_score DESC")
-    rows = cursor.fetchall()
+    rows = conn.execute("SELECT * FROM repositories ORDER BY health_score DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/sync/status")
+def sync_status(request: Request) -> dict[str, Any]:
+    session = current_session(request)
+    idle = {"state": "idle", "repos": 0, "prs_scanned": 0, "errors": [], "last_synced_at": None}
+    return statuses.get(session.login, idle) if session else idle
+
+
+@app.post("/api/sync")
+def sync_now() -> dict[str, bool]:
+    sync_wanted.set()
+    return {"started": True}
 
 
 @app.post("/api/repositories")
@@ -178,27 +233,19 @@ def add_github_repository(req: AddRepositoryRequest, request: Request) -> dict[s
     except RepoError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     add_repository(repo_id, branch)
+    session = current_session(request)
+    if session:
+        link_user_repository(session.login, repo_id)
     return {"id": repo_id, "full_name": repo_id, "default_branch": branch}
 
 
 @app.get("/api/reports")
-def get_reports() -> list[dict[str, Any]]:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT * FROM scan_reports
-        ORDER BY created_at DESC
-        LIMIT 20
-    """
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+def get_reports(request: Request) -> list[dict[str, Any]]:
+    return get_visible_reports(visible_repos(request))
 
 
 @app.get("/api/reports/{report_id}")
-def get_report_details(report_id: str) -> dict[str, Any]:
+def get_report_details(report_id: str, request: Request) -> dict[str, Any]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM scan_reports WHERE id = ?", (report_id,))
@@ -206,6 +253,8 @@ def get_report_details(report_id: str) -> dict[str, Any]:
     if not report_row:
         conn.close()
         raise HTTPException(status_code=404, detail="Report not found")
+
+    require_repo_access(request, report_row["repo_id"])
 
     cursor.execute("SELECT * FROM findings WHERE report_id = ?", (report_id,))
     finding_rows = cursor.fetchall()
@@ -227,18 +276,17 @@ def get_report_details(report_id: str) -> dict[str, Any]:
 
 @app.get("/api/issues")
 def list_issues(
+    request: Request,
     status: Optional[str] = Query(None, description="'open' or 'fixed'"),
     verdict: Optional[str] = Query(None, description="'CONFIRMED_DRIFT' or 'POSSIBLE_DRIFT'"),
 ) -> list[dict[str, Any]]:
     """Returns all documentation drift issues across scans."""
-    return get_all_issues(status=status, verdict=verdict)
+    return get_all_issues(status=status, verdict=verdict, repo_ids=visible_repos(request))
 
 
 @app.get("/api/issues/{issue_id}")
-def get_issue(issue_id: str) -> dict[str, Any]:
-    issue = get_issue_by_id(issue_id)
-    if not issue:
-        raise HTTPException(status_code=404, detail="Issue not found")
+def get_issue(issue_id: str, request: Request) -> dict[str, Any]:
+    issue = _visible_issue(request, issue_id)
 
     preview = _preview_for_issue(issue)
 
@@ -248,10 +296,9 @@ def get_issue(issue_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/issues/{issue_id}/fix")
-def apply_fix_by_id(issue_id: str) -> dict[str, Any]:
-    issue = get_issue_by_id(issue_id)
-    if not issue:
-        raise HTTPException(status_code=404, detail="Issue not found")
+def apply_fix_by_id(issue_id: str, request: Request) -> dict[str, Any]:
+    _no_local_fixes_when_hosted()
+    issue = _visible_issue(request, issue_id)
 
     preview = _preview_for_issue(issue)
     if not preview.is_applicable:
@@ -270,15 +317,19 @@ def apply_fix_by_id(issue_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/autofix/proposals")
-def get_autofix_proposals() -> list[dict[str, Any]]:
+def get_autofix_proposals(request: Request) -> list[dict[str, Any]]:
     """Returns all open drift issues with computed before/after patch previews."""
-    open_issues = get_all_issues(status="open")
+    open_issues = get_all_issues(status="open", repo_ids=visible_repos(request))
     proposals = []
     for issue in open_issues:
         preview = _preview_for_issue(issue)
         proposals.append(
             {
                 "issue_id": issue["id"],
+                "repo_id": issue["repo_id"],
+                "pr_number": issue["pr_number"],
+                "default_branch": issue["default_branch"],
+                "head_sha": issue["head_sha"],
                 "changed_symbol": issue["changed_symbol"],
                 "source_file": issue["source_file"],
                 "doc_file": issue["doc_file"],
@@ -300,8 +351,7 @@ def get_settings() -> dict[str, Any]:
     return {
         "settings": settings,
         "system": {
-            "github_token_configured": bool(os.getenv("GITHUB_TOKEN")),
-            "github_webhook_secret_configured": bool(os.getenv("GITHUB_WEBHOOK_SECRET")),
+                        "github_webhook_secret_configured": bool(os.getenv("GITHUB_WEBHOOK_SECRET")),
             **model_status(),
             "environment": os.getenv("ENV", "development"),
         },
@@ -317,42 +367,28 @@ def update_settings(req: SettingsUpdateRequest) -> dict[str, Any]:
 
 @app.post("/api/scan/live")
 def run_live_scan(req: ScanRequest, request: Request) -> dict[str, Any]:
-    report_id = f"report-{uuid.uuid4().hex[:8]}"
+    if login_enabled() and not req.repo_id:
+        raise HTTPException(status_code=400, detail="Choose a repository to scan")
     repo_id = req.repo_id or local_repo_id()
     if not repository_exists(repo_id):
         raise HTTPException(status_code=404, detail=f"Unknown repository: {repo_id}")
+    require_repo_access(request, repo_id)
 
-    root = repo_dir(repo_id)
     try:
-        base_ref, head_ref = resolve_refs(root, repo_id, req.base_ref, req.head_ref, req.pr_number, token_for(request))
+        report_id, base_ref, head_ref, scan = scan_repository(
+            repo_id,
+            token_for(request),
+            req.base_ref,
+            req.head_ref,
+            req.pr_number,
+            audit=req.audit,
+        )
     except RepoError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    try:
-        scan = run_analysis(
-            repo_root=root,
-            base_ref=base_ref,
-            head_ref=head_ref,
-            audit=req.audit,
-            confidence_threshold=float(get_settings_data().get("confidence_threshold", 0.0)),
-        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Scan failed: {exc}")
 
     findings_data = [f.to_dict() for f in scan.findings]
-    save_scan_report(
-        report_id=report_id,
-        repo_id=repo_id,
-        base_sha=base_ref,
-        head_sha=head_ref,
-        pr_number=req.pr_number,
-        total_drifts=scan.total_drifts,
-        confirmed_drifts=scan.confirmed_drifts,
-        possible_drifts=scan.possible_drifts,
-        health_score=scan.health_score,
-        findings=findings_data,
-    )
-
     return {
         "report_id": report_id,
         "repo_id": repo_id,
@@ -369,7 +405,8 @@ def run_live_scan(req: ScanRequest, request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/autofix/preview")
-def preview_fix(req: AutoFixRequest) -> dict[str, Any]:
+def preview_fix(req: AutoFixRequest, request: Request) -> dict[str, Any]:
+    require_repo_access(request, req.repo_id or local_repo_id())
     dummy_finding = Finding(
         verdict=Verdict.CONFIRMED_DRIFT,
         confidence=1.0,
@@ -394,6 +431,7 @@ def preview_fix(req: AutoFixRequest) -> dict[str, Any]:
 
 @app.post("/api/autofix/apply")
 def apply_approved_fix(req: AutoFixRequest) -> dict[str, Any]:
+    _no_local_fixes_when_hosted()
     dummy_finding = Finding(
         verdict=Verdict.CONFIRMED_DRIFT,
         confidence=1.0,

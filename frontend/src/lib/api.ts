@@ -5,6 +5,7 @@ export interface OverviewData {
   confirmed_drifts: number;
   possible_drifts: number;
   resolved_drifts: number;
+  prs_checked: number;
   recent_reports: Array<{
     id: string;
     repo_id: string;
@@ -25,6 +26,13 @@ export interface Repository {
   default_branch: string;
   health_score: number;
   last_scanned_at: string;
+  description?: string;
+  language?: string;
+  is_private?: number;
+  pushed_at?: string;
+  open_prs?: number;
+  open_issues?: number;
+  prs_checked?: number;
 }
 
 export interface Issue {
@@ -49,10 +57,17 @@ export interface Issue {
   diff_preview?: string;
   is_applicable?: boolean;
   engine?: string;
+  pr_title?: string | null;
+  head_sha?: string;
+  default_branch?: string;
 }
 
 export interface AutoFixProposal {
   issue_id: string;
+  repo_id: string;
+  pr_number: number | null;
+  default_branch: string;
+  head_sha: string;
   changed_symbol: string;
   source_file: string;
   doc_file: string;
@@ -125,6 +140,29 @@ export function describeScan(result: ScanResult, target: string): string {
   return `No drift: checked ${result.changes_checked} code change${result.changes_checked === 1 ? '' : 's'} in ${target}.`;
 }
 
+export interface AuthStatus {
+  login_enabled: boolean;
+  private_repos_allowed: boolean;
+  logged_in: boolean;
+  user: { login: string; name: string; avatar_url: string } | null;
+  can_read_private: boolean;
+}
+
+export interface SyncStatus {
+  state: 'idle' | 'syncing';
+  repos: number;
+  prs_scanned: number;
+  errors: string[];
+  last_synced_at: string | null;
+}
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+}
+
 const API_BASE = '/api';
 const SELECTED_REPO_KEY = 'docguard.selectedRepo';
 
@@ -136,6 +174,49 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   } catch {
     return fallback;
   }
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const res = await fetch(`${API_BASE}/auth/status`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Backend is not reachable');
+  return res.json();
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+}
+
+export async function getSyncStatus(): Promise<SyncStatus> {
+  const res = await fetch(`${API_BASE}/sync/status`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Could not read the sync status');
+  return res.json();
+}
+
+export async function startSync(): Promise<void> {
+  const res = await fetch(`${API_BASE}/sync`, { method: 'POST' });
+  if (!res.ok) throw new Error('Could not start a sync');
+}
+
+// Where to read a sentence on GitHub, and where to fix it in GitHub's own editor.
+export function githubFileLinks(
+  repo: string | undefined,
+  file: string,
+  line: number,
+  commit?: string,
+  branch?: string
+): { view: string; edit: string } | null {
+  if (!repo) return null;
+  const path = file.split('/').map(encodeURIComponent).join('/');
+  return {
+    view: `https://github.com/${repo}/blob/${commit || branch || 'HEAD'}/${path}#L${line}`,
+    edit: `https://github.com/${repo}/edit/${branch || 'HEAD'}/${path}`,
+  };
+}
+
+export async function getPullRequests(repo: string): Promise<PullRequest[]> {
+  const res = await fetch(`${API_BASE}/github/pulls?repo=${encodeURIComponent(repo)}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(await errorMessage(res, 'Could not load pull requests'));
+  return res.json();
 }
 
 export function getSelectedRepo(): string | null {

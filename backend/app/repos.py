@@ -22,6 +22,10 @@ class RepoError(Exception):
     """A problem the user can fix, shown to them as is."""
 
 
+def github_clone_url() -> str:
+    return (os.getenv("GITHUB_CLONE_URL") or os.getenv("GITHUB_URL") or "https://github.com").rstrip("/")
+
+
 def _git(*args: str, cwd: Optional[Path] = None, timeout: int = 180, token: Optional[str] = None) -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     if token:
@@ -29,7 +33,7 @@ def _git(*args: str, cwd: Optional[Path] = None, timeout: int = 180, token: Opti
         credentials = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         env.update(
             GIT_CONFIG_COUNT="1",
-            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
+            GIT_CONFIG_KEY_0=f"http.{github_clone_url()}/.extraheader",
             GIT_CONFIG_VALUE_0=f"AUTHORIZATION: basic {credentials}",
         )
     try:
@@ -75,7 +79,7 @@ def clone_repo(repo_id: str, token: Optional[str] = None) -> str:
     if target != PROJECT_ROOT and not target.exists():
         CLONES_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            _git("clone", "--quiet", f"https://github.com/{repo_id}.git", str(target), timeout=300, token=token)
+            _git("clone", "--quiet", f"{github_clone_url()}/{repo_id}.git", str(target), timeout=300, token=token)
         except RepoError:
             shutil.rmtree(target, ignore_errors=True)
             raise RepoError(f"Could not clone {repo_id}. Check that it exists and you can access it.")

@@ -9,25 +9,29 @@ from __future__ import annotations
 import hmac
 import os
 import secrets
+import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from dotenv import load_dotenv
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
 from backend.app.repos import RepoError, parse_repo_name
 
-GITHUB_URL = "https://github.com"
-GITHUB_API = "https://api.github.com"
 SESSION_COOKIE = "docguard_session"
 STATE_COOKIE = "docguard_oauth_state"
 SESSION_SECONDS = 8 * 60 * 60
 MAX_REPO_PAGES = 3
 
 router = APIRouter()
+
+# Tells the background sync to run now, such as right after signing in.
+sync_wanted = threading.Event()
 
 
 @dataclass
@@ -43,6 +47,33 @@ class Session:
 sessions: dict[str, Session] = {}
 
 
+def github_url() -> str:
+    return os.getenv("GITHUB_URL", "https://github.com").rstrip("/")
+
+
+def github_api() -> str:
+    return os.getenv("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+def _env_file_time() -> float:
+    return ENV_FILE.stat().st_mtime if ENV_FILE.exists() else 0.0
+
+
+_env_loaded_at = _env_file_time()
+
+
+def _reload_env_if_changed() -> None:
+    """Lets someone add their OAuth App's values without restarting the backend."""
+    global _env_loaded_at
+    changed_at = _env_file_time()
+    if changed_at != _env_loaded_at:
+        _env_loaded_at = changed_at
+        load_dotenv(ENV_FILE, override=True)
+
+
 def client_id() -> str:
     return os.getenv("GITHUB_CLIENT_ID", "")
 
@@ -52,6 +83,7 @@ def client_secret() -> str:
 
 
 def login_enabled() -> bool:
+    _reload_env_if_changed()
     return bool(client_id() and client_secret())
 
 
@@ -72,6 +104,12 @@ def current_session(request: Request) -> Optional[Session]:
     return session
 
 
+def live_sessions() -> list[Session]:
+    """One session per person, since two browsers of the same user need only one sync."""
+    now = time.time()
+    return list({s.login: s for s in sessions.values() if s.expires_at > now}.values())
+
+
 def token_for(request: Request) -> Optional[str]:
     session = current_session(request)
     return session.token if session else None
@@ -79,7 +117,7 @@ def token_for(request: Request) -> Optional[str]:
 
 def _github_get(path: str, token: str, **params: Any) -> httpx.Response:
     return httpx.get(
-        f"{GITHUB_API}{path}",
+        f"{github_api()}{path}",
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
@@ -137,7 +175,7 @@ def login(private: bool = False) -> RedirectResponse:
             "state": state,
         }
     )
-    response = RedirectResponse(f"{GITHUB_URL}/login/oauth/authorize?{query}", status_code=302)
+    response = RedirectResponse(f"{github_url()}/login/oauth/authorize?{query}", status_code=302)
     _set_cookie(response, STATE_COOKIE, state, 600)
     return response
 
@@ -153,7 +191,7 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
 
     try:
         token_response = httpx.post(
-            f"{GITHUB_URL}/login/oauth/access_token",
+            f"{github_url()}/login/oauth/access_token",
             headers={"Accept": "application/json"},
             data={
                 "client_id": client_id(),
@@ -188,12 +226,14 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
     response = RedirectResponse(f"{app_url()}/dashboard", status_code=302)
     response.delete_cookie(STATE_COOKIE)
     _set_cookie(response, SESSION_COOKIE, session_id, SESSION_SECONDS)
+    sync_wanted.set()
     return response
 
 
 @router.post("/api/auth/logout")
-def logout(request: Request) -> dict[str, bool]:
+def logout(request: Request, response: Response) -> dict[str, bool]:
     sessions.pop(request.cookies.get(SESSION_COOKIE, ""), None)
+    response.delete_cookie(SESSION_COOKIE)
     return {"logged_out": True}
 
 
@@ -220,10 +260,8 @@ def _github_json(path: str, token: str, **params: Any) -> Any:
     return response.json()
 
 
-@router.get("/api/github/repos")
-def list_github_repos(request: Request) -> list[dict[str, Any]]:
-    """The repositories this user can import, most recently pushed first."""
-    token = _require_token(request)
+def list_user_repos(token: str) -> list[dict[str, Any]]:
+    """The repositories this user can access, most recently pushed first."""
     repos: list[dict[str, Any]] = []
     for page in range(1, MAX_REPO_PAGES + 1):
         batch = _github_json("/user/repos", token, per_page=100, sort="pushed", page=page)
@@ -240,6 +278,14 @@ def list_github_repos(request: Request) -> list[dict[str, Any]]:
             "pushed_at": repo.get("pushed_at") or "",
         }
         for repo in repos
+    ]
+
+
+def list_open_pulls(repo_id: str, token: str) -> list[dict[str, Any]]:
+    pulls = _github_json(f"/repos/{repo_id}/pulls", token, state="open", sort="updated", direction="desc", per_page=30)
+    return [
+        {"number": pull["number"], "title": pull.get("title", ""), "head_sha": pull["head"]["sha"]}
+        for pull in pulls
     ]
 
 

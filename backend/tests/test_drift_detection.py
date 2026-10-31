@@ -153,6 +153,27 @@ def test_model_dismisses_a_coincidence(monkeypatch):
     assert finding.engine == intelligence.DEFAULT_MODEL
 
 
+def test_model_checks_every_sentence_holding_the_old_value(monkeypatch):
+    asked = []
+
+    def post(url, json, timeout):
+        sentence = json["messages"][1]["content"].rsplit("Sentence: ", 1)[1].split("\n")[0]
+        asked.append(sentence)
+        request = httpx.Request("POST", url)
+        answer = {"describes_setting": "give up" in sentence}
+        return httpx.Response(200, request=request, json={"message": {"content": _json.dumps(answer)}})
+
+    _json = json
+    monkeypatch.setattr(intelligence.httpx, "post", post)
+    change = CodeChange("cli.py", ChangeType.CONSTANT_CHANGED, "TIMEOUT", "30", "60")
+    section = DocSection("README.md", "Usage", "This guide has 30 pages.\nRequests give up after 30 seconds.", 1, 2)
+    finding = intelligence.QwenProvider().evaluate(CandidatePair(change, section))
+    assert asked == ["This guide has 30 pages.", "Requests give up after 30 seconds."]
+    assert finding.verdict == Verdict.CONFIRMED_DRIFT
+    assert finding.doc_start_line == 2
+    assert finding.suggested_fix == "Requests give up after 60 seconds."
+
+
 def test_rules_decide_exact_matches_without_the_model(monkeypatch):
     def post(*args, **kwargs):
         raise AssertionError("The model should not be called")

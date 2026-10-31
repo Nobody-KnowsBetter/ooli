@@ -1,0 +1,157 @@
+name: DocGuard
+description: Points to the exact doc sentences a pull request probably made wrong, and the code change responsible.
+branding:
+  icon: book-open
+  color: gray-dark
+
+inputs:
+  use-model:
+    description: Run Qwen for sentences the rules can't decide. It's only downloaded when one exists.
+    default: "true"
+  model:
+    description: The Ollama model to use.
+    default: qwen2.5-coder:3b
+  comment:
+    description: Post the report as a pull request comment.
+    default: "true"
+  fail-on-drift:
+    description: Fail the check when drift is confirmed.
+    default: "false"
+  github-token:
+    description: Token used to post the comment.
+    default: ${{ github.token }}
+
+outputs:
+  drift-count:
+    description: Sentences reported.
+    value: ${{ steps.final.outputs.drift-count }}
+  confirmed-count:
+    description: Sentences confirmed as wrong.
+    value: ${{ steps.final.outputs.confirmed-count }}
+  possible-count:
+    description: Sentences that may be wrong.
+    value: ${{ steps.final.outputs.possible-count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      id: python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        update-environment: false # Leaves the Python of the user's other steps alone.
+
+    - name: Install DocGuard
+      shell: bash
+      run: |
+        "${{ steps.python.outputs.python-path }}" -m venv "$RUNNER_TEMP/docguard-venv"
+        "$RUNNER_TEMP/docguard-venv/bin/pip" install --quiet --disable-pip-version-check "httpx>=0.27"
+
+    # Rules are instant, and they tell us whether the 2 GB model is needed at all.
+    - name: Check with rules
+      id: rules
+      if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+      shell: bash
+      env:
+        DOCGUARD_AI_PROVIDER: heuristic
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        "$RUNNER_TEMP/docguard-venv/bin/python" "$GITHUB_ACTION_PATH/backend/src/docguard.py" \
+          --base "$BASE_SHA" --head "$HEAD_SHA" --report "$RUNNER_TEMP/docguard-report.md"
+
+    - name: Cache the model
+      if: steps.rules.outputs.possible-count > 0 && inputs.use-model == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.docguard-ollama
+        key: docguard-ollama-${{ inputs.model }}
+
+    - name: Start the model
+      id: model
+      if: steps.rules.outputs.possible-count > 0 && inputs.use-model == 'true'
+      continue-on-error: true # Without the model, the rules' report still stands.
+      shell: bash
+      env:
+        MODEL: ${{ inputs.model }}
+      run: |
+        curl -fsSL https://ollama.com/install.sh | sh
+        sudo systemctl stop ollama 2>/dev/null || true
+        OLLAMA_MODELS="$HOME/.docguard-ollama" nohup ollama serve >/dev/null 2>&1 &
+        for _ in $(seq 1 30); do
+          curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break
+          sleep 1
+        done
+        ollama pull "$MODEL"
+
+    - name: Check with Qwen
+      id: qwen
+      if: steps.model.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      env:
+        DOCGUARD_AI_PROVIDER: qwen
+        DOCGUARD_MODEL: ${{ inputs.model }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        "$RUNNER_TEMP/docguard-venv/bin/python" "$GITHUB_ACTION_PATH/backend/src/docguard.py" \
+          --base "$BASE_SHA" --head "$HEAD_SHA" --report "$RUNNER_TEMP/docguard-report.md"
+
+    - name: Share the results
+      id: final
+      if: steps.rules.outcome == 'success'
+      shell: bash
+      env:
+        DRIFT: ${{ steps.qwen.outputs.drift-count || steps.rules.outputs.drift-count }}
+        CONFIRMED: ${{ steps.qwen.outputs.confirmed-count || steps.rules.outputs.confirmed-count }}
+        POSSIBLE: ${{ steps.qwen.outputs.possible-count || steps.rules.outputs.possible-count }}
+      run: |
+        {
+          echo "drift-count=${DRIFT:-0}"
+          echo "confirmed-count=${CONFIRMED:-0}"
+          echo "possible-count=${POSSIBLE:-0}"
+        } >> "$GITHUB_OUTPUT"
+        [ -f "$RUNNER_TEMP/docguard-report.md" ] && cat "$RUNNER_TEMP/docguard-report.md" >> "$GITHUB_STEP_SUMMARY"
+        exit 0
+
+    - name: Comment on the pull request
+      if: >-
+        steps.final.outcome == 'success' && inputs.comment == 'true' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      continue-on-error: true # Missing permissions shouldn't fail the check. The job summary has the report.
+      uses: actions/github-script@v7
+      env:
+        DRIFT: ${{ steps.final.outputs.drift-count }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- docguard-report -->';
+          const issue_number = context.issue.number;
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            ...context.repo,
+            issue_number,
+            per_page: 100,
+          });
+          const existing = comments.find((c) => c.body.includes(marker));
+          const hasDrift = Number(process.env.DRIFT) > 0;
+
+          // A clean pull request gets no comment, unless an earlier one needs correcting.
+          if (!hasDrift && !existing) return;
+
+          const report = fs.readFileSync(`${process.env.RUNNER_TEMP}/docguard-report.md`, 'utf8');
+          const body = `${marker}\n${report}`;
+          if (existing) {
+            await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ ...context.repo, issue_number, body });
+          }
+
+    - name: Fail on confirmed drift
+      if: inputs.fail-on-drift == 'true' && steps.final.outputs.confirmed-count > 0
+      shell: bash
+      run: |
+        echo "::error title=DocGuard::This pull request made documentation wrong. See the report in the job summary."
+        exit 1
