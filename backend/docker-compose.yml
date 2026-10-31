@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  docguard-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docguard-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - DOCGUARD_AI_PROVIDER=heuristic
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
