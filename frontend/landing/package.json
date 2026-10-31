@@ -1,0 +1,19 @@
+{
+  "name": "kaviyan-website-clone",
+  "version": "1.0.0",
+  "description": "Complete, standalone, pixel-perfect clone of Kaviyan AI Video Studio (https://kaviyan.framer.website)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "framer",
+    "kaviyan",
+    "clone",
+    "ai-video-studio"
+  ],
+  "author": "",
+  "license": "ISC"
+}
+
