@@ -49,6 +49,7 @@ from backend.app.github_auth import current_session, login_enabled, router as gi
 from backend.app.sync import refresh_repo_list, scan_repository, start_background_sync, statuses
 from backend.app.repos import RepoError, clone_repo, local_repo_id, parse_repo_name, repo_dir, resolve_refs
 
+
 # Ensure database tables exist immediately
 init_db()
 
