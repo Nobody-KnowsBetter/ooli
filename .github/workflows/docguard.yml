@@ -27,10 +27,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          python src/docguard.py --base "$BASE_SHA" --head "$HEAD_SHA"
+          python backend/src/docguard.py --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Show report in the job summary
+        if: always() && hashFiles('docguard-report.md') != ''
+        run: cat docguard-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on pull request
-        if: always() && hashFiles('docguard-report.md') != ''
+        # A PR from a fork gets a read-only token, so it can't post comments.
+        if: always() && hashFiles('docguard-report.md') != '' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
