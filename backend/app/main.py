@@ -5,12 +5,24 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
+
+# Ensure project root is in sys.path regardless of execution directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from dotenv import load_dotenv
+
+load_dotenv(PROJECT_ROOT / "backend" / ".env")  # Runs first, because the imports below read settings.
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.app.ai.intelligence import model_status, selected_provider_name
@@ -30,8 +42,8 @@ from backend.app.database.db import (
     save_scan_report,
     update_settings_data,
 )
+from backend.app.github_auth import current_session, login_enabled, router as github_router, token_for
 from backend.app.repos import RepoError, clone_repo, local_repo_id, parse_repo_name, repo_dir, resolve_refs
-
 
 # Ensure database tables exist immediately
 init_db()
@@ -50,10 +62,30 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(github_router)
+
+# These must work before login. GitHub signs its own webhook calls.
+PUBLIC_API_PREFIXES = ("/api/auth/", "/api/health", "/api/webhook/")
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if (
+        login_enabled()
+        and path.startswith("/api/")
+        and not path.startswith(PUBLIC_API_PREFIXES)
+        and not current_session(request)
+    ):
+        return JSONResponse({"detail": "Log in with GitHub first"}, status_code=401)
+    return await call_next(request)
+
+
 # Enable CORS for Next.js dashboard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # This API can edit files.
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -138,11 +170,11 @@ def get_repositories() -> list[dict[str, Any]]:
 
 
 @app.post("/api/repositories")
-def add_github_repository(req: AddRepositoryRequest) -> dict[str, Any]:
-    """Clones a public GitHub repository so it can be scanned. Accepts owner/name or a GitHub URL."""
+def add_github_repository(req: AddRepositoryRequest, request: Request) -> dict[str, Any]:
+    """Clones a GitHub repository so it can be scanned. Accepts owner/name or a GitHub URL."""
     try:
         repo_id = parse_repo_name(req.repository)
-        branch = clone_repo(repo_id)
+        branch = clone_repo(repo_id, token_for(request))
     except RepoError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     add_repository(repo_id, branch)
@@ -284,7 +316,7 @@ def update_settings(req: SettingsUpdateRequest) -> dict[str, Any]:
 
 
 @app.post("/api/scan/live")
-def run_live_scan(req: ScanRequest) -> dict[str, Any]:
+def run_live_scan(req: ScanRequest, request: Request) -> dict[str, Any]:
     report_id = f"report-{uuid.uuid4().hex[:8]}"
     repo_id = req.repo_id or local_repo_id()
     if not repository_exists(repo_id):
@@ -292,7 +324,7 @@ def run_live_scan(req: ScanRequest) -> dict[str, Any]:
 
     root = repo_dir(repo_id)
     try:
-        base_ref, head_ref = resolve_refs(root, repo_id, req.base_ref, req.head_ref, req.pr_number)
+        base_ref, head_ref = resolve_refs(root, repo_id, req.base_ref, req.head_ref, req.pr_number, token_for(request))
     except RepoError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
