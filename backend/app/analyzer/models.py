@@ -79,6 +79,7 @@ class Finding:
     code_diff: str = ""
     evidence: list[str] = field(default_factory=list)
     engine: str = "heuristic"  # What reached this verdict: "heuristic" or the model name.
+    source_line: int = 1  # The line of the code change responsible.
 
     def to_dict(self) -> dict[str, Any]:
         return {

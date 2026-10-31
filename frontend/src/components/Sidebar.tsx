@@ -10,47 +10,38 @@ import {
   Wand2,
   Settings,
   ShieldCheck,
-  ExternalLink,
   History,
+  LogOut,
 } from 'lucide-react';
-import { GithubIcon } from '@/components/GithubIcon';
-import { getHealth, getRepositories, getSelectedRepo, Health } from '@/lib/api';
+import { AuthStatus, getHealth, Health, logout } from '@/lib/api';
 
 const navigation = [
-  { name: 'Overview', href: '/', icon: LayoutDashboard },
-  { name: 'Repositories', href: '/repositories', icon: GitBranch },
-  { name: 'Issues', href: '/issues', icon: AlertTriangle },
-  { name: 'Auto-Fix', href: '/autofix', icon: Wand2 },
-  { name: 'History', href: '/history', icon: History },
-  { name: 'Settings', href: '/settings', icon: Settings },
+  { name: 'Overview', href: '/dashboard', icon: LayoutDashboard },
+  { name: 'Repositories', href: '/dashboard/repositories', icon: GitBranch },
+  { name: 'Issues', href: '/dashboard/issues', icon: AlertTriangle },
+  { name: 'Fixes', href: '/dashboard/autofix', icon: Wand2 },
+  { name: 'History', href: '/dashboard/history', icon: History },
+  { name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
-export function Sidebar() {
+export function Sidebar({ auth }: { auth: AuthStatus }) {
   const pathname = usePathname();
-  const [repoName, setRepoName] = useState<string | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [backendDown, setBackendDown] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [repos, status] = await Promise.all([getRepositories(), getHealth()]);
-        const selected = getSelectedRepo();
-        setRepoName(repos.find((r) => r.id === selected)?.full_name ?? repos[0]?.full_name ?? null);
-        setHealth(status);
+        setHealth(await getHealth());
         setBackendDown(false);
       } catch {
         setBackendDown(true);
       }
     };
     load();
-    // Keeps the status true if Ollama or the backend stops, or another repository is picked.
+    // Keeps the status true if the model or the backend stops.
     const timer = setInterval(load, 15000);
-    window.addEventListener('docguard-repo-changed', load);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener('docguard-repo-changed', load);
-    };
+    return () => clearInterval(timer);
   }, []);
 
   const usingModel = health?.ai_provider === 'qwen' && health?.model_ready;
@@ -70,10 +61,10 @@ export function Sidebar() {
     amber: 'bg-amber-400',
   };
   const textColor: Record<string, string> = {
-    red: 'text-red-400',
-    zinc: 'text-zinc-400',
-    emerald: 'text-emerald-400',
-    amber: 'text-amber-400',
+    red: 'text-red-700',
+    zinc: 'text-zinc-600',
+    emerald: 'text-emerald-700',
+    amber: 'text-amber-700',
   };
 
   return (
@@ -81,28 +72,20 @@ export function Sidebar() {
       <div className="flex flex-col">
         {/* Brand Header */}
         <div className="h-14 px-5 flex items-center justify-between border-b border-border">
-          <Link href="/" className="flex items-center space-x-2.5 group">
-            <div className="h-7 w-7 rounded-md bg-white text-black flex items-center justify-center font-bold shadow-sm">
+          <a href="/" className="flex items-center space-x-2.5 group">
+            <div className="h-7 w-7 rounded-xl bg-ink text-white flex items-center justify-center font-bold">
               <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
             </div>
             <div>
-              <span className="font-semibold text-sm tracking-tight text-white block">DocGuard</span>
+              <span className="font-semibold text-sm tracking-tight text-ink block">DocGuard</span>
             </div>
-          </Link>
-          <span className="text-[10px] px-2 py-0.5 rounded border border-border text-zinc-400 font-mono">
-            v1.0
-          </span>
+          </a>
+          
         </div>
 
-        {/* Repository context */}
-        <div className="px-4 py-2.5 border-b border-border bg-black/40">
-          <div className="flex items-center space-x-2 text-xs text-zinc-400">
-            <GithubIcon className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-            <span className="truncate font-mono text-[11px] text-zinc-300">
-              {repoName ?? 'No repository'}
-            </span>
-          </div>
-          <div className={`flex items-center space-x-1.5 mt-1 text-[11px] font-mono ${textColor[engineStatus.color]}`}>
+        {/* Engine status */}
+        <div className="px-4 py-2.5 border-b border-border bg-paper">
+          <div className={`flex items-center space-x-1.5 text-[11px] ${textColor[engineStatus.color]}`}>
             <span className={`h-1.5 w-1.5 rounded-full ${dotColor[engineStatus.color]}`}></span>
             <span>{engineStatus.label}</span>
           </div>
@@ -112,23 +95,23 @@ export function Sidebar() {
         <nav className="p-2.5 space-y-1">
           {navigation.map((item) => {
             const isActive =
-              item.href === '/'
-                ? pathname === '/'
+              item.href === '/dashboard'
+                ? pathname === '/dashboard'
                 : pathname.startsWith(item.href);
             const Icon = item.icon;
             return (
               <Link
                 key={item.name}
                 href={item.href}
-                className={`flex items-center space-x-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
                   isActive
-                    ? 'bg-zinc-800 text-white font-semibold border border-zinc-700/80 shadow-sm'
-                    : 'text-zinc-400 hover:text-white hover:bg-card-hover'
+                    ? 'bg-zinc-100 text-ink font-semibold border border-zinc-200 shadow-sm'
+                    : 'text-zinc-600 hover:text-ink hover:bg-card-hover'
                 }`}
               >
                 <Icon
                   className={`w-4 h-4 ${
-                    isActive ? 'text-white' : 'text-zinc-400'
+                    isActive ? 'text-ink' : 'text-zinc-600'
                   }`}
                 />
                 <span>{item.name}</span>
@@ -138,21 +121,35 @@ export function Sidebar() {
         </nav>
       </div>
 
-      {/* Footer Info */}
-      <div className="p-3 border-t border-border">
-        <a
-          href={repoName ? `https://github.com/${repoName}` : 'https://github.com'}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center justify-between text-xs text-zinc-400 hover:text-white p-2 rounded-md hover:bg-card-hover transition"
-        >
-          <span className="flex items-center space-x-2">
-            <GithubIcon className="w-3.5 h-3.5" />
-            <span>GitHub Repository</span>
-          </span>
-          <ExternalLink className="w-3.5 h-3.5 text-zinc-500" />
-        </a>
-      </div>
+      {/* Signed-in user */}
+      {auth.user && (
+        <div className="p-3 border-t border-border space-y-2">
+          <a
+            href={`https://github.com/${auth.user.login}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2.5 p-1.5 rounded-xl hover:bg-card-hover transition min-w-0"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={auth.user.avatar_url} alt="" className="h-8 w-8 rounded-full shrink-0 bg-paper" />
+            <span className="min-w-0">
+              <span className="block text-xs font-semibold text-ink truncate">{auth.user.name}</span>
+              <span className="block text-[11px] text-zinc-600 truncate">@{auth.user.login}</span>
+            </span>
+          </a>
+          <button
+            type="button"
+            onClick={async () => {
+              await logout();
+              window.location.assign('/');
+            }}
+            className="w-full flex items-center justify-center gap-2 text-xs font-medium text-zinc-700 hover:text-ink border border-border hover:border-zinc-400 rounded-xl py-2 transition"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign out</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

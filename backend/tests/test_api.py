@@ -1,9 +1,35 @@
 """Tests for FastAPI backend endpoints."""
+import subprocess
+
+import pytest
 from fastapi.testclient import TestClient
+from backend.app import sync
 from backend.app.main import app
 from backend.app.repos import local_repo_id
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def scan_target(tmp_path, monkeypatch):
+    """Scans a small repository of its own, so these tests also pass without this project's git history."""
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", *args],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    (tmp_path / "cli.py").write_text("TIMEOUT = 30\n")
+    (tmp_path / "README.md").write_text("The TIMEOUT is 30.\n")
+    git("add", ".")
+    git("commit", "-qm", "before")
+    (tmp_path / "cli.py").write_text("TIMEOUT = 60\n")
+    git("commit", "-qam", "after")
+    monkeypatch.setattr(sync, "repo_dir", lambda repo_id: tmp_path)
 
 
 def test_root_only_points_to_the_dashboard():
@@ -83,6 +109,7 @@ def test_api_settings_get_and_update():
 
 
 def test_api_reports_list_and_detail():
+    client.post("/api/scan/live", json={"base_ref": "HEAD~1", "head_ref": "HEAD"})
     res = client.get("/api/reports")
     assert res.status_code == 200
     reports = res.json()

@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 :root {
-  --foreground: #ededed;
-  --background: #000000;
+  --foreground: #0f0f0f;
+  --background: #fafafa;
 }
 
 body {
@@ -16,13 +16,13 @@ body {
 
 /* Minimalist Monochrome Card */
 .glass-panel {
-  background: #0a0a0a;
-  border: 1px solid #222222;
+  background: #ffffff;
+  border: 1px solid #e6e6e6;
   transition: all 0.15s ease-out;
 }
 
 .glass-panel:hover {
-  border-color: #333333;
+  border-color: #cfcfcf;
 }
 
 /* Scrollbars */
@@ -32,11 +32,11 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #000000;
+  background: #fafafa;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #d4d4d4;
   border-radius: 2px;
 }
 

@@ -1,10 +1,12 @@
 """Finds the code to scan: this checkout, or a public GitHub repository we clone."""
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -20,8 +22,20 @@ class RepoError(Exception):
     """A problem the user can fix, shown to them as is."""
 
 
-def _git(*args: str, cwd: Optional[Path] = None, timeout: int = 180) -> str:
+def github_clone_url() -> str:
+    return (os.getenv("GITHUB_CLONE_URL") or os.getenv("GITHUB_URL") or "https://github.com").rstrip("/")
+
+
+def _git(*args: str, cwd: Optional[Path] = None, timeout: int = 180, token: Optional[str] = None) -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    if token:
+        # Passed through the environment so it's never saved in .git/config or shown in a process list.
+        credentials = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        env.update(
+            GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0=f"http.{github_clone_url()}/.extraheader",
+            GIT_CONFIG_VALUE_0=f"AUTHORIZATION: basic {credentials}",
+        )
     try:
         res = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
@@ -56,7 +70,7 @@ def parse_repo_name(text: str) -> str:
     return f"{match.group(1)}/{match.group(2)}"
 
 
-def clone_repo(repo_id: str) -> str:
+def clone_repo(repo_id: str, token: Optional[str] = None) -> str:
     """Clones the repository if needed and returns its default branch.
 
     Scanning only parses its code with `ast`. Nothing from the repository is ever run.
@@ -65,10 +79,10 @@ def clone_repo(repo_id: str) -> str:
     if target != PROJECT_ROOT and not target.exists():
         CLONES_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            _git("clone", "--quiet", f"https://github.com/{repo_id}.git", str(target), timeout=300)
+            _git("clone", "--quiet", f"{github_clone_url()}/{repo_id}.git", str(target), timeout=300, token=token)
         except RepoError:
             shutil.rmtree(target, ignore_errors=True)
-            raise RepoError(f"Could not clone {repo_id}. Check that it exists and is public.")
+            raise RepoError(f"Could not clone {repo_id}. Check that it exists and you can access it.")
     return _git("rev-parse", "--abbrev-ref", "HEAD", cwd=target, timeout=10)
 
 
@@ -88,7 +102,12 @@ def merge_base_of_pr(root: Path, main_ref: str, head: str, pr_number: int) -> st
 
 
 def resolve_refs(
-    root: Path, repo_id: str, base_ref: str, head_ref: str, pr_number: Optional[int]
+    root: Path,
+    repo_id: str,
+    base_ref: str,
+    head_ref: str,
+    pr_number: Optional[int],
+    token: Optional[str] = None,
 ) -> tuple[str, str]:
     """Works out which two commits to compare, fetching the latest from GitHub when needed."""
     if not root.exists():
@@ -99,11 +118,11 @@ def resolve_refs(
             raise RepoError("Enter a valid pull request number")
         ref = f"refs/docguard/pr/{pr_number}"
         try:
-            _git("fetch", "--quiet", "--force", "origin", f"pull/{pr_number}/head:{ref}", cwd=root)
+            _git("fetch", "--quiet", "--force", "origin", f"pull/{pr_number}/head:{ref}", cwd=root, token=token)
         except RepoError:
             raise RepoError(f"Could not find pull request #{pr_number} on {repo_id}")
         branch = _git("rev-parse", "--abbrev-ref", "origin/HEAD", cwd=root, timeout=10)
-        _git("fetch", "--quiet", "origin", branch.split("/", 1)[1], cwd=root)
+        _git("fetch", "--quiet", "origin", branch.split("/", 1)[1], cwd=root, token=token)
         # Compare with where the PR branched off, so changes merged to main since don't count.
         head = _git("rev-parse", ref, cwd=root, timeout=10)
         return merge_base_of_pr(root, "FETCH_HEAD", head, pr_number), head
@@ -111,4 +130,11 @@ def resolve_refs(
     for ref in (base_ref, head_ref):
         if not SAFE_REF_RE.match(ref):
             raise RepoError(f"Not a valid git ref: {ref}")
+
+    if root != PROJECT_ROOT:
+        # "The last commit" should mean the latest on GitHub, not the one from when it was cloned.
+        try:
+            _git("pull", "--quiet", "--ff-only", cwd=root, token=token)
+        except RepoError as exc:
+            print(f"Scanning the local copy of {repo_id}, because it couldn't be updated: {exc}", file=sys.stderr)
     return base_ref, head_ref

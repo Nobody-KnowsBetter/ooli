@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from backend.app.ai.intelligence import HeuristicAIProvider, get_ai_provider
 from backend.app.analyzer.ast_analyzer import compare_python_ast, parse_python_ast
@@ -16,6 +17,9 @@ from backend.app.analyzer.models import ChangeType, CodeChange, DocSection, Find
 
 # Local models are slow, so only the most relevant candidates reach Qwen.
 MAX_MODEL_CALLS = 8
+
+# A PR comment should stay short enough that people read it.
+MAX_REPORTED = 10
 
 # Sentences about the past are allowed to mention old values.
 HISTORICAL_RE = re.compile(
@@ -56,79 +60,47 @@ class ScanResult:
     possible_drifts: int = 0
     health_score: float = 100.0
 
-    def generate_markdown_report(self) -> str:
-        lines = [
-            "## 🛡️ DocGuard Documentation Intelligence Report",
-            "",
-        ]
+    def drifts(self) -> list[Finding]:
+        """Drift findings, the most certain first."""
+        found = [f for f in self.findings if f.verdict != Verdict.NO_DRIFT_DETECTED]
+        return sorted(found, key=lambda f: (f.verdict != Verdict.CONFIRMED_DRIFT, -f.confidence))
 
-        drift_findings = [f for f in self.findings if f.verdict in {Verdict.CONFIRMED_DRIFT, Verdict.POSSIBLE_DRIFT}]
+    def generate_markdown_report(self, link_base: Optional[str] = None) -> str:
+        """Writes the PR comment. With link_base, file names link to the exact lines on GitHub."""
 
-        if not drift_findings:
-            lines += [
-                "✅ **No documentation drift detected.**",
-                "",
-                "Documentation accurately reflects recent code modifications.",
-                "",
-                f"- Evaluated **{len(self.code_changes)}** code modifications.",
-                f"- Health Score: **{self.health_score:.0f}%**",
-            ]
+        def location(path: str, line: int) -> str:
+            text = f"`{path}:{line}`"
+            return f"[{text}]({link_base}/{quote(path)}#L{line})" if link_base else text
+
+        drifts = self.drifts()
+        lines = ["## DocGuard report", ""]
+
+        if not drifts:
+            checked = len(self.code_changes)
+            lines.append(f"No drift found. Checked {checked} code change{'' if checked == 1 else 's'}.")
             return "\n".join(lines) + "\n"
 
-        lines += [
-            f"⚠️ **Documentation drift detected! ({len(drift_findings)} issue{'s' if len(drift_findings) != 1 else ''} found)**",
-            "",
-            f"Repository Documentation Health: **{self.health_score:.0f}%**",
-            "",
-            "---",
-        ]
+        count = len(drifts)
+        lines += [f"This change probably made **{count} sentence{'' if count == 1 else 's'}** in the docs wrong.", ""]
 
-        for i, f in enumerate(drift_findings, start=1):
-            badge = "🔴 CONFIRMED DRIFT" if f.verdict == Verdict.CONFIRMED_DRIFT else "🟡 POSSIBLE DRIFT"
+        for f in drifts[:MAX_REPORTED]:
+            label = "" if f.verdict == Verdict.CONFIRMED_DRIFT else " (possible)"
             lines += [
-                f"### Issue #{i}: `{f.changed_symbol}` in `{f.doc_file}`",
+                f"### {location(f.doc_file, f.doc_start_line)}{label}",
                 "",
-                f"**Verdict**: {badge} &nbsp;|&nbsp; **Confidence**: `{f.confidence * 100:.0f}%`",
-                "",
-                f"- **Source File**: `{f.source_file}`",
-                f"- **Documentation File**: `{f.doc_file}` (Line {f.doc_start_line})",
-                "",
-                f"**Outdated Statement in Documentation:**",
                 f"> {f.outdated_excerpt}",
                 "",
-                f"**Why this is incorrect:**",
-                f"{f.explanation}",
+                f"**Caused by** {location(f.source_file, f.source_line)}: {f.explanation}",
                 "",
             ]
-
-            if f.code_diff:
-                lines += [
-                    "**Related Code Diff:**",
-                    "```diff",
-                    f"{f.code_diff}",
-                    "```",
-                    "",
-                ]
-
             if f.suggested_fix:
-                lines += [
-                    "**Suggested Correction:**",
-                    f"> {f.suggested_fix}",
-                    "",
-                ]
+                lines += ["**Suggested fix:**", "", f"> {f.suggested_fix}", ""]
 
-            if f.evidence:
-                lines += ["**Supporting Evidence:**"]
-                for ev in f.evidence:
-                    lines.append(f"- {ev}")
-                lines.append("")
+        if count > MAX_REPORTED:
+            lines += [f"...and {count - MAX_REPORTED} more.", ""]
 
-            lines.append("---")
-
-        lines += [
-            "",
-            "💡 *Run `python backend/src/docguard.py --autofix` or approve suggestions in the DocGuard Dashboard to apply fixes.*",
-        ]
+        engines = sorted({f.engine for f in drifts})
+        lines.append(f"<sub>Checked by: {', '.join(engines)}. This check never blocks a merge unless you turn that on.</sub>")
         return "\n".join(lines) + "\n"
 
 
@@ -207,12 +179,15 @@ def run_analysis(
     # 1. Get changed files
     try:
         names = run_git_cmd("diff", "--name-only", f"{base_ref}...{head_ref}", cwd=repo_root).splitlines()
-    except Exception:
-        # Fallback for two-dot diff or single commit
+    except RuntimeError:
+        # Unrelated histories have no three-dot diff. If this fails too, we must not report "no drift".
         try:
             names = run_git_cmd("diff", "--name-only", base_ref, head_ref, cwd=repo_root).splitlines()
-        except Exception:
-            names = []
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Could not compare {base_ref} with {head_ref}. "
+                "In GitHub Actions, set fetch-depth: 0 on actions/checkout."
+            ) from exc
 
     all_changes: list[CodeChange] = []
 
@@ -251,6 +226,7 @@ def run_analysis(
     for index, cand in enumerate(candidates):
         provider = ai_provider if index < MAX_MODEL_CALLS else heuristic
         finding = provider.evaluate(cand)
+        finding.source_line = cand.change.line_number
 
         if HISTORICAL_RE.search(finding.outdated_excerpt):
             continue

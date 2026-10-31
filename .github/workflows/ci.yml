@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Get the code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Some tests compare commits.
 
       - name: Install Python
         uses: actions/setup-python@v5

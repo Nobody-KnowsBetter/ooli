@@ -1,127 +1,93 @@
 #!/usr/bin/env python3
-"""DocGuard: AI-Powered Documentation Intelligence Platform.
+"""DocGuard's command line: checks a code change against the docs and writes a report.
 
-Maintains backward-compatibility with GitHub Actions while leveraging
-AST analysis, hybrid candidate mapping, and evidence-grounded AI reasoning.
+The GitHub Action runs this. It needs only Python and httpx, not the dashboard's API.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-# Add project root to sys.path so backend imports succeed
+# Lets `backend.app...` import from wherever this is run, such as a user's repository in CI.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend.app.analyzer.models import Verdict  # noqa: E402
+from backend.app.analyzer.pipeline import ScanResult, run_analysis  # noqa: E402
+from backend.app.autofix.patcher import apply_fix, generate_fix_preview  # noqa: E402
 
-def run_legacy_fallback(base: str, head: str, report_path: str) -> int:
-    """Original MVP heuristic fallback to guarantee zero regression."""
-    import re
-    import subprocess
 
-    assignment = re.compile(
-        r"^(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*(?P<value>[^#\n]+?)\s*(?:#.*)?$",
-        re.MULTILINE,
-    )
+def escape_data(text: str) -> str:
+    """Docs are untrusted, so a sentence must not be able to start its own workflow command."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
-    def git(*args: str) -> str:
-        res = subprocess.run(["git", *args], text=True, capture_output=True, check=False)
-        if res.returncode != 0:
-            raise RuntimeError(res.stderr.strip() or f"git {' '.join(args)} failed")
-        return res.stdout
 
-    def parse_assignments(text: str) -> dict[str, str]:
-        return {m.group("name"): m.group("value").strip().strip("'\"") for m in assignment.finditer(text)}
+def escape_property(text: str) -> str:
+    return escape_data(text).replace(":", "%3A").replace(",", "%2C")
 
-    names = git("diff", "--name-only", f"{base}...{head}").splitlines()
-    changes = []
-    for fn in names:
-        if not fn.endswith(".py"):
-            continue
-        try:
-            old_text = git("show", f"{base}:{fn}")
-        except Exception:
-            old_text = ""
-        try:
-            new_text = git("show", f"{head}:{fn}")
-        except Exception:
-            continue
-        old_vals = parse_assignments(old_text)
-        new_vals = parse_assignments(new_text)
-        for name in sorted(old_vals.keys() & new_vals.keys()):
-            if old_vals[name] != new_vals[name]:
-                changes.append((fn, name, old_vals[name], new_vals[name]))
 
-    docs = [p for p in Path(".").glob("**/*.md") if ".git" not in p.parts and p.name != Path(report_path).name]
-    issues = []
-    for source, name, old, new in changes:
-        for doc in docs:
-            text = doc.read_text(encoding="utf-8", errors="ignore")
-            if old in text and new not in text:
-                issues.append((source, name, old, new, str(doc)))
+def write_github_results(scan: ScanResult) -> None:
+    """Marks each sentence in the PR's checks and shares the counts with later workflow steps."""
+    for finding in scan.drifts():
+        level = "warning" if finding.verdict == Verdict.CONFIRMED_DRIFT else "notice"
+        print(
+            f"::{level} file={escape_property(finding.doc_file)},line={finding.doc_start_line},"
+            f"title=DocGuard::{escape_data(finding.explanation)}"
+        )
 
-    lines = ["## DocGuard report", ""]
-    if issues:
-        lines += [f"⚠️ **Potential documentation drift found: {len(issues)}**", ""]
-        for source, name, old, new, doc in issues:
-            lines += [
-                f"- **{doc}** may be outdated.",
-                f"  - Related code: `{source}`",
-                f"  - Changed constant: `{name}`",
-                f"  - Code changed: `{old}` → `{new}`",
-                f"  - Evidence: the documentation contains `{old}` but not `{new}`.",
-                "",
-            ]
-    else:
-        lines += [
-            "✅ No potential drift found by the MVP checks.",
-            "",
-            "Note: this is a heuristic scan, not proof that all documentation is correct.",
-        ]
-    report = "\n".join(lines) + "\n"
-    Path(report_path).write_text(report, encoding="utf-8")
-    print(report)
-    return 0
+    output_file = os.getenv("GITHUB_OUTPUT")
+    if output_file:
+        with open(output_file, "a", encoding="utf-8") as output:
+            output.write(f"drift-count={scan.total_drifts}\n")
+            output.write(f"confirmed-count={scan.confirmed_drifts}\n")
+            output.write(f"possible-count={scan.possible_drifts}\n")
+
+
+def link_base(head: str) -> str | None:
+    server, repository = os.getenv("GITHUB_SERVER_URL"), os.getenv("GITHUB_REPOSITORY")
+    return f"{server}/{repository}/blob/{head}" if server and repository else None
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DocGuard Documentation Intelligence Scanner")
-    parser.add_argument("--base", default="HEAD~1", help="Base commit SHA or branch (default: HEAD~1)")
-    parser.add_argument("--head", default="HEAD", help="Head commit SHA or branch (default: HEAD)")
-    parser.add_argument("--report", default="docguard-report.md", help="Path to write markdown report")
-    parser.add_argument("--autofix", action="store_true", help="Automatically apply suggested fixes")
-    parser.add_argument("--audit", action="store_true", help="Run full repository documentation audit")
+    parser = argparse.ArgumentParser(description="Finds the doc sentences a code change made wrong.")
+    parser.add_argument("--base", default="HEAD~1", help="Commit before the change (default: HEAD~1)")
+    parser.add_argument("--head", default="HEAD", help="Commit after the change (default: HEAD)")
+    parser.add_argument("--repo-root", default=".", help="The repository to check (default: this folder)")
+    parser.add_argument("--report", default="docguard-report.md", help="Where to write the Markdown report")
+    parser.add_argument("--autofix", action="store_true", help="Apply suggested fixes to the docs")
+    parser.add_argument("--audit", action="store_true", help="Also check the whole repository")
+    parser.add_argument("--fail-on-drift", action="store_true", help="Exit with an error on confirmed drift")
     args = parser.parse_args()
 
+    repo_root = Path(args.repo_root).resolve()
     try:
-        from backend.app.analyzer.pipeline import run_analysis
-        from backend.app.autofix.patcher import apply_fix, generate_fix_preview
-
-        scan = run_analysis(repo_root=PROJECT_ROOT, base_ref=args.base, head_ref=args.head, audit=args.audit)
-        report_content = scan.generate_markdown_report()
-        Path(args.report).write_text(report_content, encoding="utf-8")
-        print(report_content)
-
-        if args.autofix and scan.findings:
-            applied = 0
-            for f in scan.findings:
-                if f.suggested_fix:
-                    preview = generate_fix_preview(PROJECT_ROOT, f)
-                    if preview.is_applicable and apply_fix(PROJECT_ROOT, preview):
-                        applied += 1
-            print(f"Applied {applied} automated documentation fixes.")
-
+        scan = run_analysis(repo_root=repo_root, base_ref=args.base, head_ref=args.head, audit=args.audit)
+    except Exception as exc:  # A broken check shouldn't stop anyone's pull request.
+        message = f"DocGuard could not check this change: {exc}"
+        print(f"::warning title=DocGuard::{escape_data(message)}" if os.getenv("GITHUB_ACTIONS") else message)
         return 0
-    except Exception as exc:
-        print(f"Notice: Running resilient fallback analyzer due to: {exc}", file=sys.stderr)
-        return run_legacy_fallback(args.base, args.head, args.report)
+
+    report = scan.generate_markdown_report(link_base=link_base(args.head))
+    Path(args.report).write_text(report, encoding="utf-8")
+    print(report)
+
+    if os.getenv("GITHUB_ACTIONS"):
+        write_github_results(scan)
+
+    if args.autofix:
+        applied = 0
+        for finding in scan.drifts():
+            if finding.suggested_fix:
+                preview = generate_fix_preview(repo_root, finding)
+                if preview.is_applicable and apply_fix(repo_root, preview):
+                    applied += 1
+        print(f"Applied {applied} documentation fixes.")
+
+    return 1 if args.fail_on_drift and scan.confirmed_drifts else 0
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:
-        print(f"DocGuard fatal error: {exc}", file=sys.stderr)
-        raise SystemExit(2)
+    raise SystemExit(main())
