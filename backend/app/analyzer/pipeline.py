@@ -36,6 +36,41 @@ def is_user_facing(change: CodeChange) -> bool:
     return not change.symbol_name.split(".")[-1].startswith("_")
 
 
+def keep_one_issue_per_sentence(findings: list[Finding]) -> list[Finding]:
+    """A maintainer fixes sentences, so each wrong sentence should count as one issue."""
+    drifts = [f for f in findings if f.verdict != Verdict.NO_DRIFT_DETECTED]
+
+    # Once a change has a confirmed sentence, a sentence that only shares its value is probably a coincidence.
+    confirmed_symbols = {
+        (f.source_file, f.changed_symbol) for f in drifts if f.verdict == Verdict.CONFIRMED_DRIFT
+    }
+    drifts = [
+        f
+        for f in drifts
+        if f.verdict == Verdict.CONFIRMED_DRIFT or (f.source_file, f.changed_symbol) not in confirmed_symbols
+    ]
+
+    # Several code changes can make one sentence wrong. Keep the most certain, and name the others.
+    kept: dict[tuple[str, int], Finding] = {}
+    causes: dict[tuple[str, int], list[str]] = {}
+    for finding in sorted(drifts, key=lambda f: (f.verdict != Verdict.CONFIRMED_DRIFT, -f.confidence)):
+        key = (finding.doc_file, finding.doc_start_line)
+        if key not in kept:
+            kept[key] = finding
+            causes[key] = [finding.changed_symbol]
+        elif finding.changed_symbol not in causes[key]:
+            causes[key].append(finding.changed_symbol)
+
+    for key, finding in kept.items():
+        others = causes[key][1:]
+        if others:
+            names = ", ".join(f"'{name}'" for name in others)
+            finding.explanation = f"{finding.explanation} Also affected by {names}."
+            finding.evidence.append(f"Also affected by: {', '.join(others)}")
+
+    return [f for f in findings if f.verdict == Verdict.NO_DRIFT_DETECTED] + list(kept.values())
+
+
 def run_git_cmd(*args: str, cwd: Optional[Path] = None) -> str:
     res = subprocess.run(
         ["git", *args],
@@ -222,7 +257,6 @@ def run_analysis(
     ai_provider = get_ai_provider()
     heuristic = HeuristicAIProvider()
     findings: list[Finding] = []
-    seen: set[tuple[str, int, str]] = set()
     for index, cand in enumerate(candidates):
         provider = ai_provider if index < MAX_MODEL_CALLS else heuristic
         finding = provider.evaluate(cand)
@@ -233,10 +267,6 @@ def run_analysis(
         if finding.verdict == Verdict.CONFIRMED_DRIFT and finding.confidence < confidence_threshold:
             finding.verdict = Verdict.POSSIBLE_DRIFT
 
-        key = (finding.doc_file, finding.doc_start_line, finding.changed_symbol)
-        if finding.verdict != Verdict.NO_DRIFT_DETECTED and key in seen:
-            continue
-        seen.add(key)
         findings.append(finding)
 
     # 5. A PR is only told about what it broke. The whole-repository check is a separate, explicit request.
@@ -245,6 +275,8 @@ def run_analysis(
         for af in audit_repository_drift(repo_root, doc_sections):
             if af.changed_symbol not in existing_symbols:
                 findings.append(af)
+
+    findings = keep_one_issue_per_sentence(findings)
 
     # Calculate statistics
     confirmed = sum(1 for f in findings if f.verdict == Verdict.CONFIRMED_DRIFT)

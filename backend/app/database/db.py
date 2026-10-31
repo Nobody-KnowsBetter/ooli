@@ -206,10 +206,9 @@ def save_scan_report(
         cursor.execute(
             """
             SELECT 1 FROM findings x JOIN scan_reports r ON x.report_id = r.id
-            WHERE r.repo_id = ? AND x.is_fixed = 0 AND x.doc_file = ?
-              AND x.changed_symbol = ? AND x.outdated_excerpt = ?
+            WHERE r.repo_id = ? AND x.is_fixed = 0 AND x.doc_file = ? AND x.outdated_excerpt = ?
         """,
-            (repo_id, f.get("doc_file"), f.get("changed_symbol"), f.get("outdated_excerpt")),
+            (repo_id, f.get("doc_file"), f.get("outdated_excerpt")),
         )
         if cursor.fetchone():
             continue

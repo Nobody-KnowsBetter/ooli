@@ -97,6 +97,50 @@ def test_stays_quiet(tmp_path, old, new, doc):
     assert scan(tmp_path, old, new, doc) == []
 
 
+def test_one_sentence_hit_by_two_changes_is_one_issue(tmp_path):
+    findings = scan(
+        tmp_path,
+        "def a(timeout=30): pass\ndef b(timeout=30): pass\n",
+        "def a(timeout=60): pass\ndef b(timeout=60): pass\n",
+        "The timeout is 30 seconds.\n",
+    )
+    assert len(findings) == 1
+    assert "Also affected by" in findings[0].explanation
+    assert findings[0].suggested_fix == "The timeout is 60 seconds."
+
+
+def test_a_coincidence_is_not_listed_next_to_a_confirmed_issue(tmp_path):
+    findings = scan(
+        tmp_path,
+        "TIMEOUT = 30\n",
+        "TIMEOUT = 60\n",
+        "# Config\nThe TIMEOUT is 30.\n\n# About\nThis guide has 30 chapters.\n",
+    )
+    assert [f.outdated_excerpt for f in findings] == ["The TIMEOUT is 30."]
+
+
+def test_two_different_wrong_sentences_stay_two_issues(tmp_path):
+    findings = scan(
+        tmp_path,
+        "TIMEOUT = 30\n",
+        "TIMEOUT = 60\n",
+        "# A\nThe TIMEOUT is 30.\n\n# B\nSet TIMEOUT below 30 here.\n",
+    )
+    assert len(findings) == 2
+
+
+def test_counts_match_the_issues_shown(tmp_path):
+    git(tmp_path, "init", "-q")
+    (tmp_path / "cli.py").write_text("def a(timeout=30): pass\ndef b(timeout=30): pass\n")
+    (tmp_path / "README.md").write_text("The timeout is 30 seconds.\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "before")
+    (tmp_path / "cli.py").write_text("def a(timeout=60): pass\ndef b(timeout=60): pass\n")
+    git(tmp_path, "commit", "-qam", "after")
+    result = run_analysis(tmp_path, "HEAD~1", "HEAD")
+    assert result.total_drifts == len(result.drifts()) == 1
+
+
 def test_changelog_may_mention_old_values(tmp_path):
     assert scan(tmp_path, "TIMEOUT = 30\n", "TIMEOUT = 60\n", "TIMEOUT is 30.\n", doc_name="CHANGELOG.md") == []
 
