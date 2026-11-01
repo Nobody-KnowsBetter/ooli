@@ -43,9 +43,12 @@ from backend.app.database.db import (
     init_db,
     mark_issue_fixed,
     repository_exists,
+    set_action_pr,
+    set_fix_pr,
     update_settings_data,
 )
-from backend.app.github_auth import current_session, login_enabled, router as github_router, sync_wanted, token_for
+from backend.app.github_writes import GithubWriteError, add_action_pull_request, create_fix_pull_request
+from backend.app.github_auth import Session, current_session, login_enabled, router as github_router, sync_wanted, token_for
 from backend.app.sync import refresh_repo_list, scan_repository, start_background_sync, statuses
 from backend.app.repos import RepoError, clone_repo, local_repo_id, parse_repo_name, repo_dir, resolve_refs
 
@@ -124,6 +127,14 @@ class AutoFixRequest(BaseModel):
     suggested_fix: str
     issue_id: Optional[str] = None
     repo_id: Optional[str] = None
+
+
+class FixPullRequestRequest(BaseModel):
+    issue_ids: list[str]
+
+
+class AddActionRequest(BaseModel):
+    repo_id: str
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -327,6 +338,7 @@ def get_autofix_proposals(request: Request) -> list[dict[str, Any]]:
         proposals.append(
             {
                 "issue_id": issue["id"],
+                "fix_pr_url": issue.get("fix_pr_url"),
                 "repo_id": issue["repo_id"],
                 "pr_number": issue["pr_number"],
                 "default_branch": issue["default_branch"],
@@ -344,6 +356,45 @@ def get_autofix_proposals(request: Request) -> list[dict[str, Any]]:
             }
         )
     return proposals
+
+
+def _session_that_can_write(request: Request) -> Session:
+    session = current_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="Sign in with GitHub first")
+    if not session.can_write:
+        # The dashboard answers this by asking GitHub for permission, then returning here.
+        raise HTTPException(status_code=403, detail="needs_write_access")
+    return session
+
+
+@app.post("/api/fixes/pull-request")
+def create_fix_pr(req: FixPullRequestRequest, request: Request) -> dict[str, Any]:
+    """Opens one pull request fixing these issues. They must all belong to one repository."""
+    session = _session_that_can_write(request)
+    issues = [_visible_issue(request, issue_id) for issue_id in req.issue_ids]
+    repos = {issue["repo_id"] for issue in issues}
+    if len(repos) != 1:
+        raise HTTPException(status_code=400, detail="Choose issues from one repository at a time")
+    try:
+        url = create_fix_pull_request(repos.pop(), session.token, issues)
+    except GithubWriteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    set_fix_pr(req.issue_ids, url)
+    return {"url": url}
+
+
+@app.post("/api/repositories/action")
+def add_action(req: AddActionRequest, request: Request) -> dict[str, Any]:
+    """Opens a pull request adding DocGuard's GitHub Action to this repository."""
+    session = _session_that_can_write(request)
+    require_repo_access(request, req.repo_id)
+    try:
+        result = add_action_pull_request(req.repo_id, session.token)
+    except GithubWriteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    set_action_pr(req.repo_id, result["url"])
+    return result
 
 
 @app.get("/api/settings")

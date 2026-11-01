@@ -33,6 +33,7 @@ export interface Repository {
   open_prs?: number;
   open_issues?: number;
   prs_checked?: number;
+  action_pr_url?: string | null;
 }
 
 export interface Issue {
@@ -64,6 +65,7 @@ export interface Issue {
 
 export interface AutoFixProposal {
   issue_id: string;
+  fix_pr_url: string | null;
   repo_id: string;
   pr_number: number | null;
   default_branch: string;
@@ -148,6 +150,7 @@ export interface AuthStatus {
   logged_in: boolean;
   user: { login: string; name: string; avatar_url: string } | null;
   can_read_private: boolean;
+  can_write: boolean;
 }
 
 export interface SyncStatus {
@@ -186,6 +189,37 @@ export async function getAuthStatus(): Promise<AuthStatus> {
 
 export async function logout(): Promise<void> {
   await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+}
+
+// GitHub asks for permission once, then brings the person back to the page they were on.
+async function askWriteAccessIfNeeded(res: Response): Promise<boolean> {
+  if (res.status !== 403) return false;
+  const body = await res.clone().json().catch(() => ({}));
+  if (body.detail !== 'needs_write_access') return false;
+  window.location.assign(`/api/auth/login?write=true&next=${encodeURIComponent(window.location.pathname)}`);
+  return true;
+}
+
+export async function createFixPullRequest(issueIds: string[]): Promise<{ url: string } | null> {
+  const res = await fetch(`${API_BASE}/fixes/pull-request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issue_ids: issueIds }),
+  });
+  if (await askWriteAccessIfNeeded(res)) return null;
+  if (!res.ok) throw new Error(await errorMessage(res, 'Could not open the fix pull request'));
+  return res.json();
+}
+
+export async function addGithubAction(repoId: string): Promise<{ url: string; already_installed: boolean } | null> {
+  const res = await fetch(`${API_BASE}/repositories/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repo_id: repoId }),
+  });
+  if (await askWriteAccessIfNeeded(res)) return null;
+  if (!res.ok) throw new Error(await errorMessage(res, 'Could not add the GitHub Action'));
+  return res.json();
 }
 
 export async function getSyncStatus(): Promise<SyncStatus> {

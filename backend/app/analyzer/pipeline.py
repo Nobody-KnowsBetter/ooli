@@ -109,7 +109,7 @@ class ScanResult:
         found = [f for f in self.findings if f.verdict != Verdict.NO_DRIFT_DETECTED]
         return sorted(found, key=lambda f: (f.verdict != Verdict.CONFIRMED_DRIFT, -f.confidence))
 
-    def generate_markdown_report(self, link_base: Optional[str] = None) -> str:
+    def generate_markdown_report(self, link_base: Optional[str] = None, edit_base: Optional[str] = None) -> str:
         """Writes the PR comment. With link_base, file names link to the exact lines on GitHub."""
 
         def location(path: str, line: int) -> str:
@@ -139,6 +139,8 @@ class ScanResult:
             ]
             if f.suggested_fix:
                 lines += ["**Suggested fix:**", "", f"> {f.suggested_fix}", ""]
+            if edit_base:
+                lines += [f"[Fix this in your pull request]({edit_base}/{quote(f.doc_file)})", ""]
 
         if count > MAX_REPORTED:
             lines += [f"...and {count - MAX_REPORTED} more.", ""]

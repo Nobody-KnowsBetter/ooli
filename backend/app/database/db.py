@@ -106,6 +106,8 @@ def init_db() -> None:
         ("scan_reports", "threshold", "REAL"),
         ("scan_reports", "analyzer_version", "INTEGER DEFAULT 0"),
         ("scan_reports", "changes_checked", "INTEGER DEFAULT 0"),
+        ("findings", "fix_pr_url", "TEXT"),
+        ("repositories", "action_pr_url", "TEXT"),
         ("repositories", "description", "TEXT DEFAULT ''"),
         ("repositories", "language", "TEXT DEFAULT ''"),
         ("repositories", "is_private", "INTEGER DEFAULT 0"),
@@ -321,6 +323,38 @@ def latest_pr_report(repo_id: str, pr_number: int, head_sha: str, analyzer_versi
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def set_fix_pr(issue_ids: list[str], url: str) -> None:
+    conn = get_db_connection()
+    conn.executemany("UPDATE findings SET fix_pr_url = ? WHERE id = ?", [(url, issue_id) for issue_id in issue_ids])
+    conn.commit()
+    conn.close()
+
+
+def open_fix_prs(repo_ids: set[str]) -> dict[str, list[str]]:
+    """Open issues that already have a fix pull request, grouped by that pull request."""
+    where, params = _repo_filter("r.repo_id", repo_ids)
+    conn = get_db_connection()
+    rows = conn.execute(
+        f"""
+        SELECT f.id, f.fix_pr_url FROM findings f JOIN scan_reports r ON f.report_id = r.id
+        WHERE f.is_fixed = 0 AND f.fix_pr_url IS NOT NULL{where}
+    """,
+        params,
+    ).fetchall()
+    conn.close()
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        grouped.setdefault(row["fix_pr_url"], []).append(row["id"])
+    return grouped
+
+
+def set_action_pr(repo_id: str, url: str) -> None:
+    conn = get_db_connection()
+    conn.execute("UPDATE repositories SET action_pr_url = ? WHERE id = ?", (url, repo_id))
+    conn.commit()
+    conn.close()
 
 
 def sync_user_repositories(login: str, repos: list[dict[str, Any]]) -> None:

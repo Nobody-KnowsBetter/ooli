@@ -25,6 +25,7 @@ from backend.app.repos import RepoError, parse_repo_name
 
 SESSION_COOKIE = "docguard_session"
 STATE_COOKIE = "docguard_oauth_state"
+RETURN_COOKIE = "docguard_return_to"
 SESSION_SECONDS = 8 * 60 * 60
 MAX_REPO_PAGES = 3
 
@@ -42,6 +43,7 @@ class Session:
     avatar_url: str
     can_read_private: bool
     expires_at: float
+    can_write: bool = False
 
 
 sessions: dict[str, Session] = {}
@@ -94,6 +96,11 @@ def app_url() -> str:
 def private_repos_allowed() -> bool:
     """Everyone on a server shares the dashboard's data, so private repos are for local use only."""
     return urlparse(app_url()).hostname in {"localhost", "127.0.0.1"}
+
+
+def safe_return_path(path: str) -> bool:
+    """Only pages inside the dashboard, so a crafted link can't send someone to another site."""
+    return path == "/dashboard" or (path.startswith("/dashboard/") and "//" not in path and "\\" not in path)
 
 
 def current_session(request: Request) -> Optional[Session]:
@@ -156,17 +163,22 @@ def auth_status(request: Request) -> dict[str, Any]:
         if session
         else None,
         "can_read_private": bool(session and session.can_read_private),
+        "can_write": bool(session and session.can_write),
     }
 
 
 @router.get("/api/auth/login")
-def login(private: bool = False) -> RedirectResponse:
+def login(private: bool = False, write: bool = False, next: str = "") -> RedirectResponse:
     if not login_enabled():
         return RedirectResponse(f"{app_url()}/dashboard", status_code=302)
 
     state = secrets.token_urlsafe(32)
     # GitHub has no read-only permission for private code, so we ask for "repo" only when the user chooses it.
-    scope = "read:user repo" if private and private_repos_allowed() else "read:user"
+    private = private and private_repos_allowed()
+    scope = "read:user repo" if private else "read:user"
+    # Writing is only asked for when someone chooses a feature that opens a pull request.
+    if write:
+        scope += " workflow" if private else " public_repo workflow"
     query = urlencode(
         {
             "client_id": client_id(),
@@ -177,6 +189,8 @@ def login(private: bool = False) -> RedirectResponse:
     )
     response = RedirectResponse(f"{github_url()}/login/oauth/authorize?{query}", status_code=302)
     _set_cookie(response, STATE_COOKIE, state, 600)
+    if safe_return_path(next):
+        _set_cookie(response, RETURN_COOKIE, next, 600)
     return response
 
 
@@ -213,18 +227,23 @@ def callback(request: Request, code: str = "", state: str = "", error: str = "")
     except (httpx.HTTPError, ValueError):
         return _login_failed("unavailable")
 
+    scopes = set(token_data.get("scope", "").replace(",", " ").split())
     session_id = secrets.token_urlsafe(32)
     sessions[session_id] = Session(
         token=token,
         login=user.get("login", ""),
         name=user.get("name") or user.get("login", ""),
         avatar_url=user.get("avatar_url", ""),
-        can_read_private="repo" in token_data.get("scope", "").replace(",", " ").split(),
+        can_read_private="repo" in scopes,
+        can_write=bool(scopes & {"repo", "public_repo"}) and "workflow" in scopes,
         expires_at=time.time() + SESSION_SECONDS,
     )
 
-    response = RedirectResponse(f"{app_url()}/dashboard", status_code=302)
+    return_path = request.cookies.get(RETURN_COOKIE, "")
+    target = return_path if safe_return_path(return_path) else "/dashboard"
+    response = RedirectResponse(f"{app_url()}{target}", status_code=302)
     response.delete_cookie(STATE_COOKIE)
+    response.delete_cookie(RETURN_COOKIE)
     _set_cookie(response, SESSION_COOKIE, session_id, SESSION_SECONDS)
     sync_wanted.set()
     return response

@@ -70,7 +70,7 @@ def main() -> int:
         print(f"::warning title=DocGuard::{escape_data(message)}" if os.getenv("GITHUB_ACTIONS") else message)
         return 0
 
-    report = scan.generate_markdown_report(link_base=link_base(args.head))
+    report = scan.generate_markdown_report(link_base=link_base(args.head), edit_base=os.getenv("DOCGUARD_EDIT_BASE"))
     Path(args.report).write_text(report, encoding="utf-8")
     print(report)
 
