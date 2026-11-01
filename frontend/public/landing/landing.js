@@ -250,61 +250,6 @@
   measureTargets();
 })();
 
-
-// ── Scroll Percentage Counter (0% -> 100%) ──
-(() => {
-  const updateScrollPct = () => {
-    const total = document.documentElement.scrollHeight - window.innerHeight;
-    const progress = total > 0 ? (window.scrollY / total) * 100 : 0;
-    const pct = Math.min(100, Math.max(0, Math.round(progress)));
-    document.querySelectorAll('.dg-pct, .framer-1m1ag2l p, [data-framer-name="Scroll Progress"] p').forEach((el) => {
-      el.textContent = `${pct}%`;
-    });
-  };
-  window.addEventListener('scroll', updateScrollPct, { passive: true });
-  window.addEventListener('resize', updateScrollPct);
-  window.addEventListener('DOMContentLoaded', updateScrollPct);
-  updateScrollPct();
-})();
-
-// ── 21% - 24%: Create Modes (3-way Expanding Cards) ──
-(() => {
-  const initCreateModes = () => {
-    const cardRemix = document.querySelector('[data-framer-name="Card · Remix"]');
-    const cardDescribe = document.querySelector('[data-framer-name="Card · Describe"]');
-    const cardCode = document.querySelector('[data-framer-name="Card · Code"]');
-    const cards = [cardRemix, cardDescribe, cardCode].filter(Boolean);
-
-    if (cards.length < 2) return;
-
-    const setActive = (activeCard) => {
-      cards.forEach((c) => {
-        if (c === activeCard) {
-          c.classList.add('dg-card-active');
-          c.classList.remove('dg-card-collapsed');
-        } else {
-          c.classList.remove('dg-card-active');
-          c.classList.add('dg-card-collapsed');
-        }
-      });
-    };
-
-    // Default to Remix open
-    setActive(cardRemix || cards[0]);
-
-    cards.forEach((c) => {
-      c.addEventListener('click', () => setActive(c));
-      c.addEventListener('mouseenter', () => setActive(c));
-    });
-  };
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initCreateModes);
-  } else {
-    initCreateModes();
-  }
-})();
-
 // ── 24% - 28%: Connected Phone Mockup Parallax ──
 (() => {
   const connectedSec = document.getElementById('connected') || document.querySelector('[data-framer-name="Connected"]');
@@ -326,4 +271,42 @@
 
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
+})();
+
+// ── Interactive Workflow Card Slider (4 Videos) ──
+(() => {
+  const initSlider = () => {
+    const slider = document.getElementById('dg-workflow-slider');
+    if (!slider) return;
+
+    const cards = slider.querySelectorAll('.dg-step-card');
+    cards.forEach((card) => {
+      card.addEventListener('click', (e) => {
+        if (card.classList.contains('is-active')) return;
+
+        // Deactivate all cards and pause their videos
+        cards.forEach((c) => {
+          c.classList.remove('is-active');
+          const vid = c.querySelector('video');
+          if (vid) {
+            vid.pause();
+          }
+        });
+
+        // Activate clicked card and play its video
+        card.classList.add('is-active');
+        const activeVid = card.querySelector('video');
+        if (activeVid) {
+          activeVid.currentTime = 0;
+          activeVid.play().catch(() => {});
+        }
+      });
+    });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSlider);
+  } else {
+    initSlider();
+  }
 })();
