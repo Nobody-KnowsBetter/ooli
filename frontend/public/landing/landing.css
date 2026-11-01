@@ -1060,3 +1060,35 @@ section[data-framer-name="Connected"] {
 .dg-roles p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--muted); min-width: 0; }
 .dg-roles b { color: var(--ink); }
 @media (max-width: 640px) { .dg-roles { grid-template-columns: minmax(0, 1fr); } }
+
+/* Collapsed workflow steps: a translucent thumbnail with the step number on top. */
+.dg-step-card:not(.is-active) {
+  background: rgba(255, 255, 255, 0.45);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.dg-step-card:not(.is-active):hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+.dg-step-card:not(.is-active) .dg-step-top .dg-step-badge,
+.dg-step-card:not(.is-active) .dg-step-top .dg-step-num {
+  display: none;
+}
+.dg-step-card:not(.is-active) .dg-step-top::before {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 56px;
+  font-weight: 600;
+  line-height: 1;
+  color: #000000;
+  text-align: center;
+}
+.dg-step-card[data-step="1"] .dg-step-top::before { content: "1"; }
+.dg-step-card[data-step="2"] .dg-step-top::before { content: "2"; }
+.dg-step-card[data-step="3"] .dg-step-top::before { content: "3"; }
+.dg-step-card[data-step="4"] .dg-step-top::before { content: "4"; }
+.dg-step-card:not(.is-active) .dg-step-mini-preview {
+  opacity: 0.45;
+}
+@media (max-width: 960px) {
+  .dg-step-card:not(.is-active) .dg-step-top::before { font-size: 32px; }
+}
