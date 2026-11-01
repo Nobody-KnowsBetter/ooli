@@ -1,13 +1,89 @@
 /* DocGuard's header, footer and login, on top of the page's own styles. */
 :root { --ink: #0f0f0f; --muted: #6b6b6b; --line: #e6e6e6; --paper: #fafafa; }
 html { scroll-behavior: smooth; }
-/* The animation runtime is removed, so anything that waited for it must simply be visible. */
-#main [data-framer-appear-id], #main section { opacity: 1 !important; }
-#main [data-framer-appear-id] { transform: none !important; }
+/* Sections remain visible; child elements can transform */
+#main section { opacity: 1 !important; }
+
+/* In the hero fan, child containers stay centered in cards while cards fly */
+#hero-fan [data-framer-appear-id] {
+  transform: none !important;
+  opacity: 1 !important;
+}
+
+#hero-fan .framer-rhc2dp,
+#hero-fan .framer-dagdm3,
+#hero-fan .framer-1339n78,
+#hero-fan .framer-ncbw1c,
+#hero-fan .framer-esga33 {
+  transform-origin: center center !important;
+  will-change: transform;
+  cursor: pointer;
+}
+
+#hero-intro {
+  will-change: transform, opacity;
+  transition: opacity 0.1s ease-out;
+}
+
+[data-framer-name="Statement Panel"] {
+  will-change: transform, opacity;
+  transition: opacity 0.1s ease-out;
+}
+
+/* Tooltip hovering on mascot */
+.dg-mascot-tooltip {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: #18181b;
+  color: #ffffff;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.35), 0 0 1px rgba(255, 255, 255, 0.2);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dg-mascot-tooltip-role {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.dg-mascot-tooltip-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.dg-mascot-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #18181b transparent transparent transparent;
+}
+.dg-mascot-hovered .dg-mascot-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+
 .dg-header { position: fixed; z-index: 1000; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; pointer-events: none; }
 .dg-header > * { pointer-events: auto; }
-.dg-brand { font: 700 20px/1 Switzer, Inter, system-ui, sans-serif; letter-spacing: -0.03em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 8px; }
-.dg-brand::before { content: ""; width: 20px; height: 20px; border-radius: 6px; background: var(--ink); }
+.dg-brand { font: 700 20px/1 Switzer, Inter, system-ui, sans-serif; letter-spacing: -0.03em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.dg-brand::before { content: ""; width: 28px; height: 28px; border-radius: 0; background: url('/assets/images/JGaMQVbj6Yq5XKUGmslLRGu5w8s.png') center/contain no-repeat; display: inline-block; flex: none; }
 .dg-nav { display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: 14px; background: var(--ink); }
 .dg-nav a { font: 500 14px/1 Switzer, Inter, system-ui, sans-serif; color: #fff; text-decoration: none; padding: 10px 12px; border-radius: 10px; white-space: nowrap; }
 .dg-nav a:hover { background: #2a2a2a; }
@@ -19,13 +95,468 @@ html { scroll-behavior: smooth; }
 .dg-cta:hover { background: #2a2a2a; }
 .dg-private { font: 400 13px/1.4 Switzer, Inter, system-ui, sans-serif; color: var(--muted); }
 .dg-error { position: fixed; z-index: 1001; top: 76px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); background: #fff; color: #b42318; border: 1px solid #f3c6c1; border-radius: 12px; padding: 10px 14px; font: 500 14px/1.4 Switzer, Inter, system-ui, sans-serif; }
-.dg-faq { max-width: 760px; margin: 32px auto 0; padding: 0 16px; }
-.dg-faq details { border-top: 1px solid var(--line); padding: 18px 0; font-family: Switzer, Inter, system-ui, sans-serif; }
-.dg-faq details:last-child { border-bottom: 1px solid var(--line); }
-.dg-faq summary { font-size: 18px; font-weight: 500; letter-spacing: -0.01em; color: var(--ink); cursor: pointer; }
-.dg-faq p { font-size: 16px; line-height: 1.5; color: var(--muted); margin: 10px 0 0; }
+/* ── FAQ Section (Modern Framer-Style Accordion) ── */
+.dg-faq-action {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.dg-faq-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f0f0f;
+  color: #ffffff !important;
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 10px 20px;
+  border-radius: 9999px;
+  box-shadow: 0 2px 8px rgba(15, 15, 15, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.dg-faq-btn:hover {
+  background: #27272a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.dg-faq-btn-icon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.dg-faq-btn-arrow {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.dg-faq-btn:hover .dg-faq-btn-arrow {
+  transform: translate(2px, -2px);
+}
+
+.dg-faq {
+  max-width: 760px;
+  margin: 44px auto 0;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dg-faq-card {
+  background: #ffffff;
+  border: 1px solid rgba(15, 15, 15, 0.08);
+  border-radius: 16px;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 15, 15, 0.03);
+  transition: border-color 0.22s ease, box-shadow 0.22s ease, background 0.22s ease;
+}
+
+.dg-faq-card:hover {
+  border-color: rgba(15, 15, 15, 0.16);
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.05);
+}
+
+.dg-faq-card[open] {
+  border-color: rgba(15, 15, 15, 0.2);
+  box-shadow: 0 6px 20px rgba(15, 15, 15, 0.06);
+}
+
+.dg-faq-trigger {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none !important;
+  outline: none;
+  gap: 16px;
+  transition: background 0.15s ease;
+}
+
+/* Hide default browser disclosure triangles in all browsers */
+.dg-faq-trigger::-webkit-details-marker,
+.dg-faq details summary::-webkit-details-marker {
+  display: none !important;
+}
+
+.dg-faq-trigger::marker,
+.dg-faq details summary::marker {
+  display: none !important;
+  content: "" !important;
+}
+
+.dg-faq-title {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 17px;
+  font-weight: 550;
+  letter-spacing: -0.015em;
+  color: #0f0f0f;
+  line-height: 1.35;
+  transition: color 0.15s ease;
+}
+
+.dg-faq-card:hover .dg-faq-title {
+  color: #000000;
+}
+
+.dg-faq-toggle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f4f4f5;
+  color: #52525b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease, color 0.2s ease;
+}
+
+.dg-faq-plus {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.dg-faq-card:hover .dg-faq-toggle {
+  background: #e4e4e7;
+  color: #18181b;
+}
+
+.dg-faq-card[open] .dg-faq-toggle {
+  background: #0f0f0f;
+  color: #ffffff;
+  transform: rotate(45deg);
+}
+
+.dg-faq-drawer {
+  padding: 0 24px 22px 24px;
+  animation: dg-faq-slide 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dg-faq-drawer p {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  color: #52525b;
+  margin: 0;
+}
+
+@keyframes dg-faq-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  .dg-faq {
+    margin-top: 28px;
+    padding: 0 12px;
+  }
+  .dg-faq-trigger {
+    padding: 16px 18px;
+  }
+  .dg-faq-title {
+    font-size: 15px;
+  }
+  .dg-faq-drawer {
+    padding: 0 18px 18px 18px;
+  }
+  .dg-faq-drawer p {
+    font-size: 14px;
+  }
+}
 .dg-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 32px 24px; border-top: 1px solid var(--line); font: 400 14px/1.4 Switzer, Inter, system-ui, sans-serif; color: var(--muted); }
 .dg-footer a { color: var(--ink); }
-@media (max-width: 640px) { .dg-nav a.dg-link { display: none; } .dg-faq summary { font-size: 16px; } }
+@media (max-width: 640px) { .dg-nav a.dg-link { display: none; } }
 /* The step names used to appear only on hover, which touch screens can't do. */
 section[data-framer-name="Timeline"] [style*="opacity:0"] { opacity: 1 !important; }
+
+/* ── macOS Window Frame & Floating Mascot ── */
+@keyframes dg-mascot-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-9px) rotate(2.5deg);
+  }
+}
+.dg-floating-mascot {
+  animation: dg-mascot-float 3.5s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+@media (max-width: 640px) {
+  .dg-floating-mascot {
+    width: 68px !important;
+    height: 68px !important;
+    top: -16px !important;
+    right: -4px !important;
+  }
+}
+
+/* ── Bottom CTA Section Matching Light Theme ── */
+.framer-n8zoa2 {
+  opacity: 1 !important;
+  transform: none !important;
+  padding: 40px 16px 80px !important;
+}
+
+.framer-mtu0fz {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 28px !important;
+  box-shadow: 0 20px 50px -15px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04) !important;
+  padding: 72px 24px 64px !important;
+  position: relative !important;
+  overflow: hidden !important;
+  gap: 0 !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* Remove the dead 340px empty arc gallery */
+.framer-ah4hm8 {
+  display: none !important;
+}
+
+/* Monochromatic light ambient accent (soft lighter black/charcoal, no green hue) */
+.framer-175bdis {
+  background: radial-gradient(60% 100% at 50% 100%, rgba(15, 15, 15, 0.05) 0%, rgba(15, 15, 15, 0) 100%) !important;
+  height: 220px !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+}
+
+/* Neutral button hover glow (no green) */
+.framer-13xbuu2 .framer-lpvgx4 {
+  background: radial-gradient(50% 50% at 50% 50%, rgba(255, 255, 255, 0.8) 0%, rgba(15, 15, 15, 0.12) 40%, rgba(15, 15, 15, 0) 70%) !important;
+}
+
+/* Header & Subtitle Typography */
+.framer-wwmqa5 {
+  margin-bottom: 8px !important;
+}
+.framer-wwmqa5 h2,
+.framer-wwmqa5 .framer-text {
+  font-size: clamp(30px, 4.5vw, 48px) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em !important;
+  color: #0f0f0f !important;
+  line-height: 1.15 !important;
+  text-align: center !important;
+}
+
+.framer-187y6yg p,
+.framer-187y6yg .framer-text {
+  font-size: 16px !important;
+  color: rgba(15, 15, 15, 0.65) !important;
+  margin: 12px 0 28px !important;
+  text-align: center !important;
+  max-width: 520px !important;
+}
+
+/* Button Container */
+.framer-13xbuu2 {
+  opacity: 1 !important;
+  transform: none !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 12px !important;
+  justify-content: center !important;
+  align-items: center !important;
+  position: relative !important;
+  z-index: 2 !important;
+}
+
+/* Primary Button ("Sign in with GitHub") - Solid Black Button */
+.framer-1kmo0l7-container a {
+  background-color: #0f0f0f !important;
+  color: #ffffff !important;
+  border-radius: 12px !important;
+  padding: 13px 24px !important;
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.2) !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+.framer-1kmo0l7-container a:hover {
+  transform: translateY(-2px) !important;
+  background-color: #2b2b2b !important;
+}
+.framer-1kmo0l7-container .framer-70bb4v {
+  background-color: #0f0f0f !important;
+}
+.framer-1kmo0l7-container p,
+.framer-1kmo0l7-container .framer-text {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+/* Secondary Button ("View the source") - Clean White Button with Border */
+.framer-19limob-container a {
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.14) !important;
+  border-radius: 12px !important;
+  padding: 13px 24px !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04) !important;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease !important;
+}
+.framer-19limob-container a:hover {
+  transform: translateY(-2px) !important;
+  background-color: #f7f7f8 !important;
+  border-color: rgba(0, 0, 0, 0.25) !important;
+}
+.framer-19limob-container .framer-70bb4v {
+  background-color: transparent !important;
+}
+.framer-19limob-container p,
+.framer-19limob-container .framer-text {
+  color: #0f0f0f !important;
+  font-weight: 500 !important;
+}
+
+
+/* ── 0% to 100% Scroll Progress Pill in Nav ── */
+.dg-pct-pill {
+  font: 600 12px/1 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 6px 10px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  letter-spacing: -0.02em;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+/* ── 21% - 24%: Create Modes (3-way Expanding Cards) ── */
+section[data-framer-name="Create Modes"] {
+  opacity: 1 !important;
+  position: relative;
+  z-index: 10;
+}
+
+[data-framer-name="Create Ways"] {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 16px !important;
+  width: 100% !important;
+  align-items: stretch !important;
+}
+
+[data-framer-name="Card · Remix"],
+[data-framer-name="Card · Describe"],
+[data-framer-name="Card · Code"] {
+  transition: flex 0.5s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease !important;
+  will-change: flex, transform;
+  cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+[data-framer-name="Card · Remix"]:hover,
+[data-framer-name="Card · Describe"]:hover,
+[data-framer-name="Card · Code"]:hover {
+  border-color: rgba(0, 0, 0, 0.14);
+}
+
+/* Active expanded card */
+.dg-card-active {
+  flex: 2.2 !important;
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.08) !important;
+}
+
+.dg-card-collapsed {
+  flex: 1 !important;
+  opacity: 0.92;
+}
+
+/* ── 24% - 28%: Connected Section & 5 Mascot Stickers Float ── */
+section[data-framer-name="Connected"] {
+  opacity: 1 !important;
+  position: relative;
+  overflow: visible !important;
+  padding: 100px 16px 80px !important;
+}
+
+#connected .framer-2m9b1t {
+  opacity: 1 !important;
+  transform: none !important;
+  will-change: transform;
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  margin: 0 auto 40px !important;
+}
+
+/* Sticker Floating Keyframes */
+@keyframes dg-sticker-bob-1 {
+  0%, 100% { transform: rotate(-12deg) translateY(0px) scale(1); }
+  50% { transform: rotate(-10deg) translateY(-10px) scale(1.02); }
+}
+@keyframes dg-sticker-bob-2 {
+  0%, 100% { transform: rotate(8deg) translateY(0px) scale(1); }
+  50% { transform: rotate(10deg) translateY(-12px) scale(1.02); }
+}
+@keyframes dg-sticker-bob-3 {
+  0%, 100% { transform: rotate(0deg) translateY(0px) scale(1); }
+  50% { transform: rotate(-2deg) translateY(-14px) scale(1.03); }
+}
+@keyframes dg-sticker-bob-4 {
+  0%, 100% { transform: rotate(6deg) translateY(0px) scale(1); }
+  50% { transform: rotate(4deg) translateY(-9px) scale(1.02); }
+}
+@keyframes dg-sticker-bob-5 {
+  0%, 100% { transform: rotate(-8deg) translateY(0px) scale(1); }
+  50% { transform: rotate(-6deg) translateY(-11px) scale(1.02); }
+}
+
+#connected .framer-wdseo6 { animation: dg-sticker-bob-1 3.8s ease-in-out infinite; }
+#connected .framer-1jwqyco { animation: dg-sticker-bob-2 4.2s ease-in-out infinite 0.4s; }
+#connected .framer-1w5apg7 { animation: dg-sticker-bob-3 4.6s ease-in-out infinite 0.8s; }
+#connected .framer-l0nrcl { animation: dg-sticker-bob-4 3.9s ease-in-out infinite 1.2s; }
+#connected .framer-9p9qf5 { animation: dg-sticker-bob-5 4.4s ease-in-out infinite 0.6s; }
+
+#connected .framer-wdseo6:hover,
+#connected .framer-1jwqyco:hover,
+#connected .framer-1w5apg7:hover,
+#connected .framer-l0nrcl:hover,
+#connected .framer-9p9qf5:hover {
+  animation-play-state: paused;
+  transform: scale(1.12) translateY(-12px) !important;
+  z-index: 10 !important;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Ambient glow pulses */
+@keyframes dg-glow-pulse {
+  0%, 100% { opacity: 0.65; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(1.08); }
+}
+
+#connected .framer-1oef4od {
+  animation: dg-glow-pulse 6s ease-in-out infinite alternate;
+}
+#connected .framer-v1xsz1 {
+  animation: dg-glow-pulse 6s ease-in-out infinite alternate 3s;
+}
