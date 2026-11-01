@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { ExternalLink, GitBranch, GitPullRequest, Lock, Plus, RefreshCw, Search } from 'lucide-react';
 import { isPortal, useAuth } from '@/components/AuthContext';
 import { Header } from '@/components/Header';
@@ -248,16 +247,6 @@ export default function RepositoriesPage() {
                             {installing === repo.id ? 'Opening PR...' : 'Add to GitHub Actions'}
                           </button>
                         ))}
-                      {issues > 0 ? (
-                        <Link
-                          href="/dashboard/issues"
-                          className="text-xs font-medium text-red-700 bg-red-500/10 border border-red-500/20 px-2.5 py-1 rounded-xl"
-                        >
-                          {issues} open {issues === 1 ? 'issue' : 'issues'}
-                        </Link>
-                      ) : repo.last_scanned_at ? (
-                        <span className="text-xs text-emerald-700">No open issues</span>
-                      ) : null}
                       <a
                         href={`https://github.com/${repo.full_name}`}
                         target="_blank"
