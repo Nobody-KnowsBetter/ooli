@@ -21,6 +21,10 @@
     if (!res.ok) return;
     const status = await res.json();
 
+    // Signed-in visitors with write access go straight to their repositories.
+    const installLink = document.getElementById('dg-install-link');
+    if (installLink && (status.can_write || !status.login_enabled)) installLink.href = '/dashboard/repositories';
+
     if (status.logged_in || !status.login_enabled) {
       document.querySelectorAll('[data-dg-login]').forEach((link) => {
         link.href = '/dashboard';

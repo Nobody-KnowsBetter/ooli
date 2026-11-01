@@ -46,7 +46,7 @@ Pull Request Event / Commit Diff
                         ▼
 ┌───────────────────────────────────────────────┐
 │       AI Semantic Intelligence Engine         │
-│  • Multi-Provider Support (Gemini/OpenAI/Heur)│
+│  • Rules + local Qwen 2.5 Coder 3B (Ollama)   │
 │  • Evidence Verification & Grounding          │
 │  • Strict JSON Schema & Confidence Scoring    │
 └───────────────────────┬───────────────────────┘

@@ -169,3 +169,18 @@ def test_adding_the_env_file_turns_login_on_without_a_restart(tmp_path, monkeypa
     env_file.write_text("GITHUB_CLIENT_ID=new-id\nGITHUB_CLIENT_SECRET=new-secret\n")
     assert github_auth.login_enabled() is True
     assert github_auth.client_id() == "new-id"
+
+
+def test_asking_for_write_access_returns_to_the_same_page(client, monkeypatch):
+    fake_github(monkeypatch, scope="read:user,public_repo,workflow")
+    res = client.get("/api/auth/login", params={"write": True, "next": "/dashboard/autofix"})
+    state = parse_qs(urlparse(res.headers["location"]).query)["state"][0]
+    res = client.get("/api/auth/callback", params={"code": "c", "state": state})
+    assert res.headers["location"] == "http://localhost:3000/dashboard/autofix"
+    assert client.get("/api/auth/status").json()["can_write"] is True
+
+
+def test_read_only_login_cannot_write(client, monkeypatch):
+    fake_github(monkeypatch, scope="read:user")
+    log_in(client)
+    assert client.get("/api/auth/status").json()["can_write"] is False

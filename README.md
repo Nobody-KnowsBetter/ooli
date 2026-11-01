@@ -1,29 +1,31 @@
 # 🛡️ DocGuard — AI-Powered Documentation Intelligence Platform
 
 [![CI](https://github.com/Nobody-KnowsBetter/ooli/actions/workflows/ci.yml/badge.svg)](https://github.com/Nobody-KnowsBetter/ooli/actions/workflows/ci.yml)
-[![Live Website](https://img.shields.io/badge/Website-ooli--wine.vercel.app-blue?style=flat&logo=vercel)](https://ooli-wine.vercel.app)
-[![GitHub Action](https://img.shields.io/badge/GitHub_Action-v1-2088FF?logo=github-actions&logoColor=white)](https://github.com/Nobody-KnowsBetter/ooli)
+[![Live Website](https://img.shields.io/badge/Website-docguard--org.vercel.app-blue?style=flat&logo=vercel)](https://docguard-org.vercel.app)
+[![GitHub Action](https://img.shields.io/badge/GitHub_Action-main-2088FF?logo=github-actions&logoColor=white)](https://github.com/Nobody-KnowsBetter/ooli)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Next.js](https://img.shields.io/badge/Frontend-Next.js-black.svg?logo=next.js&logoColor=white)](https://nextjs.org)
 [![Ollama](https://img.shields.io/badge/AI-Qwen%202.5%20Coder%203B%20(Ollama)-orange.svg)](https://ollama.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.md)
 
-> **Prevent documentation rot before code merges.** DocGuard detects the exact sentences in your docs that a pull request or code change invalidated, pinpoints the responsible code diff, and generates one-click automated fixes.
+> **Prevent documentation rot before code merges.** DocGuard detects the exact sentences in your docs that a pull request or code change invalidated, pinpoints the responsible code diff, and opens a fix pull request in one click.
 
-🌐 **Live Demo Website:** [https://docguard-org.vercel.app/](https://docguard-org.vercel.app/)
+🌐 **Live Demo Website:** [docguard-org.vercel.app](https://docguard-org.vercel.app)
 
 ---
 
 ## 🚀 Use It On Your Repository (GitHub Action)
 
-Add `.github/workflows/docguard.yml` to any GitHub repository:
+Sign in on the website and click **Add to GitHub Actions** on a repository. DocGuard opens a setup pull request, and once you merge it, every pull request gets checked. You can also add `.github/workflows/docguard.yml` yourself:
 
 ```yaml
 name: DocGuard
 
+# Runs on pull requests from forks too, so outside contributors see the report.
+# DocGuard only reads the pull request's code. It never runs it.
 on:
-  pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -36,17 +38,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Nobody-KnowsBetter/ooli@v1
+      - uses: Nobody-KnowsBetter/ooli@main
 ```
 
-Every pull request now gets a comment naming the exact doc sentences it made wrong, the code change responsible, and a suggested fix. If nothing drifted, no comment is posted. Everything runs privately inside your GitHub Actions environment: no accounts, no external API keys, and your code never leaves your runner.
+Every pull request now gets a comment naming the exact doc sentences it made wrong, the code change responsible, a suggested fix and a link to fix it in that pull request. There's no comment when nothing drifted. Everything runs inside your own GitHub Actions: no account, no API key, and your code stays there.
 
 | Input | Default | What it does |
 |---|---|---|
 | `use-model` | `true` | Runs Qwen for ambiguous sentences rules can't decide. Model is downloaded only when needed. |
 | `model` | `qwen2.5-coder:3b` | The Ollama model to use. |
-| `comment` | `true` | Posts the report on the pull request. (Forks receive the report in the Job Summary). |
-| `fail-on-drift` | `false` | Fails the CI check when drift is confirmed. |
+| `comment` | `true` | Posts the report on the pull request. It always appears in the job summary too. |
+| `fail-on-drift` | `false` | Fails the check when it confirms drift. |
 
 **Outputs:** `drift-count`, `confirmed-count`, `possible-count`.
 
@@ -84,12 +86,12 @@ These **silent documentation drifts** lead to:
 - 🔍 **Deterministic AST Diffing:** Tracks changes to CLI flags (`argparse`), function parameters, constants, route paths, configuration defaults, and environment variables. Skips tests and private symbols to minimize noise.
 - 📑 **Smart Doc Chunking:** Parses Markdown files into addressable semantic sentences and sections with exact line numbers, automatically filtering out changelogs and release notes.
 - 🧠 **Hybrid Verification Engine:** 
-  - **Deterministic Rules:** Instantly verifies exact symbol and value collisions with 100% precision.
+  - **Deterministic Rules:** Instantly verifies exact symbol and value collisions.
   - **Local LLM Reasoning (Qwen 2.5 Coder 3B via Ollama):** Analyzes ambiguous sentences that mention outdated values without explicitly naming the variable (e.g., *"Requests give up after 30 seconds"* when default timeout changed to `60`).
-  - **Zero Cost / Offline Capable:** Runs locally using ~2 GB RAM without mandatory cloud API keys. Cloud fallback (Gemini/OpenAI) is also supported.
+  - **Zero Cost / Offline Capable:** Runs locally using ~2 GB RAM without mandatory cloud API keys. No closed-model APIs are used.
 - 🛠️ **Automated Patch Proposals:** Generates precise, line-by-line documentation diffs ready to be applied with a single click.
 - 📊 **Interactive Web Dashboard:** Modern Next.js UI providing repository health scores, drift histories, findings breakdown, and repository configuration.
-- 🔑 **Maintainer Portal & GitHub OAuth:** Sign in with GitHub to automatically sync your public/private repositories and poll PRs in real time.
+- 🔑 **Maintainer Portal & GitHub OAuth:** Sign in with GitHub to automatically sync your repositories (private repositories only when run locally) and poll PRs in real time.
 
 ---
 
@@ -208,7 +210,7 @@ Suggested Correction:
 ```text
 DocGuard/
 ├── .github/workflows/     # CI workflow and DocGuard PR drift detection action
-├── action.yml             # Official reusable GitHub Action (Nobody-KnowsBetter/ooli@v1)
+├── action.yml             # Official reusable GitHub Action (Nobody-KnowsBetter/ooli@main)
 ├── backend/
 │   ├── app/
 │   │   ├── ai/            # Qwen / Ollama and LLM provider interfaces & prompts

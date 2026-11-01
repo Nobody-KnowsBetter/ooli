@@ -19,6 +19,9 @@ from backend.app.database.db import (
     find_saved_report,
     get_settings_data,
     latest_pr_report,
+    mark_issue_fixed,
+    open_fix_prs,
+    user_repo_ids,
     save_scan_report,
     set_open_prs,
     sync_user_repositories,
@@ -30,6 +33,7 @@ from backend.app.github_auth import (
     live_sessions,
     sync_wanted,
 )
+from backend.app.github_writes import pull_is_merged
 from backend.app.repos import clone_repo, repo_dir, resolve_refs
 
 SYNC_SECONDS = 120
@@ -198,6 +202,15 @@ def sync_session(session: Session) -> dict[str, Any]:
     except Exception as exc:
         print(f"Sync failed for {session.login}: {exc}")
         status["errors"].append("GitHub")
+
+    # A fix pull request that got merged resolves its issues.
+    try:
+        for url, issue_ids in open_fix_prs(user_repo_ids(session.login)).items():
+            if pull_is_merged(url, session.token):
+                for issue_id in issue_ids:
+                    mark_issue_fixed(issue_id)
+    except Exception as exc:
+        print(f"Could not check fix pull requests for {session.login}: {exc}")
 
     status["state"] = "idle"
     status["last_synced_at"] = datetime.now(timezone.utc).isoformat()
