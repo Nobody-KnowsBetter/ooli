@@ -1,13 +1,89 @@
 /* DocGuard's header, footer and login, on top of the page's own styles. */
 :root { --ink: #0f0f0f; --muted: #6b6b6b; --line: #e6e6e6; --paper: #fafafa; }
 html { scroll-behavior: smooth; }
-/* The animation runtime is removed, so anything that waited for it must simply be visible. */
-#main [data-framer-appear-id], #main section { opacity: 1 !important; }
-#main [data-framer-appear-id] { transform: none !important; }
+/* Sections remain visible; child elements can transform */
+#main section { opacity: 1 !important; }
+
+/* In the hero fan, child containers stay centered in cards while cards fly */
+#hero-fan [data-framer-appear-id] {
+  transform: none !important;
+  opacity: 1 !important;
+}
+
+#hero-fan .framer-rhc2dp,
+#hero-fan .framer-dagdm3,
+#hero-fan .framer-1339n78,
+#hero-fan .framer-ncbw1c,
+#hero-fan .framer-esga33 {
+  transform-origin: center center !important;
+  will-change: transform;
+  cursor: pointer;
+}
+
+#hero-intro {
+  will-change: transform, opacity;
+  transition: opacity 0.1s ease-out;
+}
+
+[data-framer-name="Statement Panel"] {
+  will-change: transform, opacity;
+  transition: opacity 0.1s ease-out;
+}
+
+/* Tooltip hovering on mascot */
+.dg-mascot-tooltip {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: #18181b;
+  color: #ffffff;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.35), 0 0 1px rgba(255, 255, 255, 0.2);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dg-mascot-tooltip-role {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.dg-mascot-tooltip-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.dg-mascot-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #18181b transparent transparent transparent;
+}
+.dg-mascot-hovered .dg-mascot-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+
 .dg-header { position: fixed; z-index: 1000; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; pointer-events: none; }
 .dg-header > * { pointer-events: auto; }
-.dg-brand { font: 700 20px/1 Switzer, Inter, system-ui, sans-serif; letter-spacing: -0.03em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 8px; }
-.dg-brand::before { content: ""; width: 20px; height: 20px; border-radius: 6px; background: var(--ink); }
+.dg-brand { font: 700 20px/1 Switzer, Inter, system-ui, sans-serif; letter-spacing: -0.03em; color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.dg-brand::before { content: ""; width: 28px; height: 28px; border-radius: 0; background: url('/assets/images/JGaMQVbj6Yq5XKUGmslLRGu5w8s.png') center/contain no-repeat; display: inline-block; flex: none; }
 .dg-nav { display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: 14px; background: var(--ink); }
 .dg-nav a { font: 500 14px/1 Switzer, Inter, system-ui, sans-serif; color: #fff; text-decoration: none; padding: 10px 12px; border-radius: 10px; white-space: nowrap; }
 .dg-nav a:hover { background: #2a2a2a; }
@@ -19,17 +95,960 @@ html { scroll-behavior: smooth; }
 .dg-cta:hover { background: #2a2a2a; }
 .dg-private { font: 400 13px/1.4 Switzer, Inter, system-ui, sans-serif; color: var(--muted); }
 .dg-error { position: fixed; z-index: 1001; top: 76px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); background: #fff; color: #b42318; border: 1px solid #f3c6c1; border-radius: 12px; padding: 10px 14px; font: 500 14px/1.4 Switzer, Inter, system-ui, sans-serif; }
-.dg-faq { max-width: 760px; margin: 32px auto 0; padding: 0 16px; }
-.dg-faq details { border-top: 1px solid var(--line); padding: 18px 0; font-family: Switzer, Inter, system-ui, sans-serif; }
-.dg-faq details:last-child { border-bottom: 1px solid var(--line); }
-.dg-faq summary { font-size: 18px; font-weight: 500; letter-spacing: -0.01em; color: var(--ink); cursor: pointer; }
-.dg-faq p { font-size: 16px; line-height: 1.5; color: var(--muted); margin: 10px 0 0; }
+/* ── Eyebrow Chip Style ── */
+.dg-eyebrow-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 15, 15, 0.05);
+  border: 1px solid rgba(15, 15, 15, 0.08);
+  padding: 5px 12px;
+  border-radius: 9999px;
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f0f0f;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.dg-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #16a34a;
+}
+
+/* ── Workflow Slider Section (Interactive 4-Card Video Accordion) ── */
+.dg-workflow-section {
+  width: 100%;
+  padding: 100px 24px;
+  display: flex;
+  justify-content: center;
+  background: #ffffff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  box-sizing: border-box;
+}
+
+.dg-workflow-container {
+  max-width: 1136px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+.dg-workflow-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.dg-workflow-title {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: clamp(30px, 4vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #0f0f0f;
+  line-height: 1.18;
+  margin: 6px 0 10px;
+}
+
+.dg-workflow-subtitle {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 17px;
+  line-height: 1.55;
+  color: #6b6b6b;
+  margin: 0;
+  max-width: 640px;
+}
+
+.dg-workflow-slider {
+  display: flex;
+  gap: 16px;
+  width: 100%;
+  min-height: 520px;
+  align-items: stretch;
+}
+
+/* Individual Step Card */
+.dg-step-card {
+  background: #ffffff;
+  border: 1px solid rgba(15, 15, 15, 0.09);
+  border-radius: 24px;
+  box-shadow: 0 4px 24px rgba(15, 15, 15, 0.04);
+  overflow: hidden;
+  position: relative;
+  transition: flex 0.5s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  will-change: flex;
+}
+
+/* Expanded Active Card */
+.dg-step-card.is-active {
+  flex: 4;
+  cursor: default;
+  background: #ffffff;
+  border-color: rgba(15, 15, 15, 0.16);
+  box-shadow: 0 12px 36px rgba(15, 15, 15, 0.07);
+}
+
+.dg-step-card.is-active .dg-step-collapsed {
+  display: none !important;
+}
+
+.dg-step-card.is-active .dg-step-expanded {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  padding: 36px;
+  gap: 32px;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.dg-step-info {
+  flex: 1;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.dg-step-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.dg-step-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #0f0f0f;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.dg-step-num {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: #a1a1aa;
+  letter-spacing: 0.05em;
+}
+
+.dg-step-pill {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(22, 163, 74, 0.1);
+  color: #15803d;
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: 12px;
+}
+
+.dg-step-title {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f0f0f;
+  line-height: 1.22;
+  margin: 0 0 12px;
+}
+
+.dg-step-desc {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #6b6b6b;
+  margin: 0 0 24px;
+}
+
+.dg-step-checks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dg-step-checks li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: #27272a;
+}
+
+.dg-step-media {
+  flex: 1.3;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-step-mac-frame {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+.dg-step-mac-bar {
+  height: 32px;
+  background: #f4f4f5;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  position: relative;
+}
+
+.dg-step-mac-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dg-step-mac-dots span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dg-dot-red { background: #ff5f57; }
+.dg-dot-yellow { background: #febc2e; }
+.dg-dot-green { background: #28c840; }
+
+.dg-step-mac-url {
+  font-family: 'Geist Mono', Menlo, monospace;
+  font-size: 11px;
+  color: #71717a;
+  background: #ffffff;
+  padding: 3px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  margin: 0 auto;
+}
+
+.dg-step-video {
+  width: 100%;
+  aspect-ratio: 16/9;
+  object-fit: cover;
+  display: block;
+  background: #ffffff;
+}
+
+/* Collapsed Step Card */
+.dg-step-card:not(.is-active) {
+  flex: 0.9;
+  min-width: 100px;
+  max-width: 150px;
+  cursor: pointer;
+  background: #fbfbfc;
+}
+
+.dg-step-card:not(.is-active):hover {
+  background: #f4f4f6;
+  border-color: rgba(15, 15, 15, 0.18);
+  transform: translateY(-2px);
+}
+
+.dg-step-card:not(.is-active) .dg-step-expanded {
+  display: none !important;
+}
+
+.dg-step-card:not(.is-active) .dg-step-collapsed {
+  display: flex !important;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  height: 100%;
+  padding: 24px 12px;
+  box-sizing: border-box;
+}
+
+.dg-step-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.dg-step-mini-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.dg-mini-thumb {
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 12px 10px;
+  width: 100%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.dg-mini-thumb.dark {
+  background: #0f0f0f;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.dg-thumb-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dg-thumb-dot-green {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #16a34a;
+  flex-shrink: 0;
+}
+
+.dg-thumb-tag {
+  font-family: 'Geist Mono', monospace, sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.dg-thumb-tag.blue {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.dg-thumb-tag.warn {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.1);
+}
+
+.dg-thumb-tag.green {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.2);
+}
+
+.dg-thumb-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dg-thumb-bar {
+  height: 4px;
+  border-radius: 99px;
+  background: #e4e4e7;
+}
+
+.dg-thumb-bar.warn {
+  background: #fde68a;
+}
+
+.dg-thumb-diff-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.dg-diff-add { color: #16a34a; }
+.dg-diff-del { color: #ef4444; }
+
+.dg-thumb-code-line {
+  height: 4px;
+  border-radius: 99px;
+}
+
+.dg-thumb-code-line.green { background: #22c55e; }
+.dg-thumb-code-line.gray { background: rgba(255, 255, 255, 0.25); }
+
+.w-50 { width: 50%; }
+.w-55 { width: 55%; }
+.w-60 { width: 60%; }
+.w-70 { width: 70%; }
+.w-75 { width: 75%; }
+.w-80 { width: 80%; }
+.w-90 { width: 90%; }
+
+.dg-mini-tag {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.dg-step-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.dg-step-collapsed-title {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #18181b;
+  margin: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dg-step-open-btn {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: #71717a;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  padding: 4px 10px;
+  border-radius: 9999px;
+  cursor: pointer;
+  pointer-events: none;
+}
+
+@media (max-width: 960px) {
+  .dg-workflow-slider {
+    flex-direction: column;
+    min-height: auto;
+  }
+  .dg-step-card:not(.is-active) {
+    max-width: 100%;
+    min-width: 100%;
+    flex: none;
+    height: 70px;
+  }
+  .dg-step-card:not(.is-active) .dg-step-collapsed {
+    flex-direction: row;
+    padding: 14px 20px;
+  }
+  .dg-step-top {
+    flex-direction: row;
+    width: auto;
+  }
+  .dg-step-mini-preview {
+    display: none;
+  }
+  .dg-step-bottom {
+    flex-direction: row;
+    width: auto;
+  }
+  .dg-step-card.is-active {
+    flex: none;
+  }
+  .dg-step-card.is-active .dg-step-expanded {
+    flex-direction: column;
+    padding: 24px;
+  }
+  .dg-step-info {
+    max-width: 100%;
+  }
+}
+
+/* ── FAQ Section (Option 1: 2-Column Split Layout) ── */
+.dg-faq-section {
+  width: 100%;
+  padding: 108px 24px !important;
+  display: flex !important;
+  justify-content: center !important;
+  background: var(--token-c39d193b-21cf-4d1e-8be4-c23db2197fd6) !important;
+  box-sizing: border-box !important;
+}
+
+.dg-faq-split-container {
+  max-width: 1136px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  gap: 64px;
+  align-items: flex-start;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+.dg-faq-left-col {
+  flex: 0 0 360px;
+  text-align: left;
+  position: sticky;
+  top: 100px;
+}
+
+.dg-faq-heading {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: clamp(32px, 3.5vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #0f0f0f;
+  line-height: 1.15;
+  margin: 12px 0 10px;
+}
+
+.dg-faq-sub {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  color: #6b6b6b;
+  margin: 0 0 24px;
+}
+
+.dg-faq-left-col .dg-faq-action {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+.dg-faq-right-col {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+.dg-faq-right-col .dg-faq {
+  max-width: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box !important;
+}
+
+.dg-faq-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f0f0f;
+  color: #ffffff !important;
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 10px 20px;
+  border-radius: 9999px;
+  box-shadow: 0 2px 8px rgba(15, 15, 15, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.dg-faq-btn:hover {
+  background: #27272a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.dg-faq-btn-icon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.dg-faq-btn-arrow {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.dg-faq-btn:hover .dg-faq-btn-arrow {
+  transform: translate(2px, -2px);
+}
+
+.dg-faq-card {
+  width: 100% !important;
+  background: #ffffff;
+  border: 1px solid rgba(15, 15, 15, 0.08);
+  border-radius: 16px;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 15, 15, 0.03);
+  box-sizing: border-box !important;
+  transition: border-color 0.22s ease, box-shadow 0.22s ease, background 0.22s ease;
+}
+
+.dg-faq-card:hover {
+  border-color: rgba(15, 15, 15, 0.16);
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.05);
+}
+
+.dg-faq-card[open] {
+  border-color: rgba(15, 15, 15, 0.2);
+  box-shadow: 0 6px 20px rgba(15, 15, 15, 0.06);
+}
+
+.dg-faq-trigger {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none !important;
+  outline: none;
+  gap: 16px;
+  transition: background 0.15s ease;
+}
+
+/* Hide default browser disclosure triangles */
+.dg-faq-trigger::-webkit-details-marker,
+.dg-faq details summary::-webkit-details-marker {
+  display: none !important;
+}
+
+.dg-faq-trigger::marker,
+.dg-faq details summary::marker {
+  display: none !important;
+  content: "" !important;
+}
+
+.dg-faq-title {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 17px;
+  font-weight: 550;
+  letter-spacing: -0.015em;
+  color: #0f0f0f;
+  line-height: 1.35;
+  transition: color 0.15s ease;
+}
+
+.dg-faq-card:hover .dg-faq-title {
+  color: #000000;
+}
+
+.dg-faq-toggle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f4f4f5;
+  color: #52525b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease, color 0.2s ease;
+}
+
+.dg-faq-plus {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.dg-faq-card:hover .dg-faq-toggle {
+  background: #e4e4e7;
+  color: #18181b;
+}
+
+.dg-faq-card[open] .dg-faq-toggle {
+  background: #0f0f0f;
+  color: #ffffff;
+  transform: rotate(45deg);
+}
+
+.dg-faq-drawer {
+  padding: 0 24px 22px 24px;
+  animation: dg-faq-slide 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dg-faq-drawer p {
+  font-family: Switzer, Inter, system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  color: #52525b;
+  margin: 0;
+}
+
+@keyframes dg-faq-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 920px) {
+  .dg-faq-split-container {
+    flex-direction: column;
+    gap: 36px;
+  }
+  .dg-faq-left-col {
+    position: static;
+    flex: none;
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .dg-faq-trigger {
+    padding: 16px 18px;
+  }
+  .dg-faq-title {
+    font-size: 15px;
+  }
+  .dg-faq-drawer {
+    padding: 0 18px 18px 18px;
+  }
+  .dg-faq-drawer p {
+    font-size: 14px;
+  }
+}
 .dg-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 32px 24px; border-top: 1px solid var(--line); font: 400 14px/1.4 Switzer, Inter, system-ui, sans-serif; color: var(--muted); }
 .dg-footer a { color: var(--ink); }
-@media (max-width: 640px) { .dg-nav a.dg-link { display: none; } .dg-faq summary { font-size: 16px; } }
+@media (max-width: 640px) { .dg-nav a.dg-link { display: none; } }
 /* The step names used to appear only on hover, which touch screens can't do. */
 section[data-framer-name="Timeline"] [style*="opacity:0"] { opacity: 1 !important; }
 
+/* ── macOS Window Frame & Floating Mascot ── */
+@keyframes dg-mascot-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-9px) rotate(2.5deg);
+  }
+}
+.dg-floating-mascot {
+  animation: dg-mascot-float 3.5s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+@media (max-width: 640px) {
+  .dg-floating-mascot {
+    width: 68px !important;
+    height: 68px !important;
+    top: -16px !important;
+    right: -4px !important;
+  }
+}
+
+/* ── Bottom CTA Section Matching Light Theme ── */
+.framer-n8zoa2 {
+  opacity: 1 !important;
+  transform: none !important;
+  padding: 40px 16px 80px !important;
+}
+
+.framer-mtu0fz {
+  background: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 28px !important;
+  box-shadow: 0 20px 50px -15px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04) !important;
+  padding: 72px 24px 64px !important;
+  position: relative !important;
+  overflow: hidden !important;
+  gap: 0 !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* Remove the dead 340px empty arc gallery */
+.framer-ah4hm8 {
+  display: none !important;
+}
+
+/* Monochromatic light ambient accent (soft lighter black/charcoal, no green hue) */
+.framer-175bdis {
+  background: radial-gradient(60% 100% at 50% 100%, rgba(15, 15, 15, 0.05) 0%, rgba(15, 15, 15, 0) 100%) !important;
+  height: 220px !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+}
+
+/* Neutral button hover glow (no green) */
+.framer-13xbuu2 .framer-lpvgx4 {
+  background: radial-gradient(50% 50% at 50% 50%, rgba(255, 255, 255, 0.8) 0%, rgba(15, 15, 15, 0.12) 40%, rgba(15, 15, 15, 0) 70%) !important;
+}
+
+/* Header & Subtitle Typography */
+.framer-wwmqa5 {
+  margin-bottom: 8px !important;
+}
+.framer-wwmqa5 h2,
+.framer-wwmqa5 .framer-text {
+  font-size: clamp(30px, 4.5vw, 48px) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em !important;
+  color: #0f0f0f !important;
+  line-height: 1.15 !important;
+  text-align: center !important;
+}
+
+.framer-187y6yg p,
+.framer-187y6yg .framer-text {
+  font-size: 16px !important;
+  color: rgba(15, 15, 15, 0.65) !important;
+  margin: 12px 0 28px !important;
+  text-align: center !important;
+  max-width: 520px !important;
+}
+
+/* Button Container */
+.framer-13xbuu2 {
+  opacity: 1 !important;
+  transform: none !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 12px !important;
+  justify-content: center !important;
+  align-items: center !important;
+  position: relative !important;
+  z-index: 2 !important;
+}
+
+/* Primary Button ("Sign in with GitHub") - Solid Black Button */
+.framer-1kmo0l7-container a {
+  background-color: #0f0f0f !important;
+  color: #ffffff !important;
+  border-radius: 12px !important;
+  padding: 13px 24px !important;
+  box-shadow: 0 4px 14px rgba(15, 15, 15, 0.2) !important;
+  transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+.framer-1kmo0l7-container a:hover {
+  transform: translateY(-2px) !important;
+  background-color: #2b2b2b !important;
+}
+.framer-1kmo0l7-container .framer-70bb4v {
+  background-color: #0f0f0f !important;
+}
+.framer-1kmo0l7-container p,
+.framer-1kmo0l7-container .framer-text {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+/* Secondary Button ("View the source") - Clean White Button with Border */
+.framer-19limob-container a {
+  background-color: #ffffff !important;
+  border: 1px solid rgba(0, 0, 0, 0.14) !important;
+  border-radius: 12px !important;
+  padding: 13px 24px !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04) !important;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease !important;
+}
+.framer-19limob-container a:hover {
+  transform: translateY(-2px) !important;
+  background-color: #f7f7f8 !important;
+  border-color: rgba(0, 0, 0, 0.25) !important;
+}
+.framer-19limob-container .framer-70bb4v {
+  background-color: transparent !important;
+}
+.framer-19limob-container p,
+.framer-19limob-container .framer-text {
+  color: #0f0f0f !important;
+  font-weight: 500 !important;
+}
+
+/* ── 24% - 28%: Connected Section & 5 Mascot Stickers Float ── */
+section[data-framer-name="Connected"] {
+  opacity: 1 !important;
+  position: relative;
+  overflow: visible !important;
+  padding: 100px 16px 80px !important;
+}
+
+#connected .framer-2m9b1t {
+  opacity: 1 !important;
+  transform: none !important;
+  will-change: transform;
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  margin: 0 auto 40px !important;
+}
+
+/* Sticker Floating Keyframes */
+@keyframes dg-sticker-bob-1 {
+  0%, 100% { transform: rotate(-12deg) translateY(0px) scale(1); }
+  50% { transform: rotate(-10deg) translateY(-10px) scale(1.02); }
+}
+@keyframes dg-sticker-bob-2 {
+  0%, 100% { transform: rotate(8deg) translateY(0px) scale(1); }
+  50% { transform: rotate(10deg) translateY(-12px) scale(1.02); }
+}
+@keyframes dg-sticker-bob-3 {
+  0%, 100% { transform: rotate(0deg) translateY(0px) scale(1); }
+  50% { transform: rotate(-2deg) translateY(-14px) scale(1.03); }
+}
+@keyframes dg-sticker-bob-4 {
+  0%, 100% { transform: rotate(6deg) translateY(0px) scale(1); }
+  50% { transform: rotate(4deg) translateY(-9px) scale(1.02); }
+}
+@keyframes dg-sticker-bob-5 {
+  0%, 100% { transform: rotate(-8deg) translateY(0px) scale(1); }
+  50% { transform: rotate(-6deg) translateY(-11px) scale(1.02); }
+}
+
+#connected .framer-wdseo6 { animation: dg-sticker-bob-1 3.8s ease-in-out infinite; }
+#connected .framer-1jwqyco { animation: dg-sticker-bob-2 4.2s ease-in-out infinite 0.4s; }
+#connected .framer-1w5apg7 { animation: dg-sticker-bob-3 4.6s ease-in-out infinite 0.8s; }
+#connected .framer-l0nrcl { animation: dg-sticker-bob-4 3.9s ease-in-out infinite 1.2s; }
+#connected .framer-9p9qf5 { animation: dg-sticker-bob-5 4.4s ease-in-out infinite 0.6s; }
+
+#connected .framer-wdseo6:hover,
+#connected .framer-1jwqyco:hover,
+#connected .framer-1w5apg7:hover,
+#connected .framer-l0nrcl:hover,
+#connected .framer-9p9qf5:hover {
+  animation-play-state: paused;
+  transform: scale(1.12) translateY(-12px) !important;
+  z-index: 10 !important;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Ambient glow pulses */
+@keyframes dg-glow-pulse {
+  0%, 100% { opacity: 0.65; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(1.08); }
+}
+
+#connected .framer-1oef4od {
+  animation: dg-glow-pulse 6s ease-in-out infinite alternate;
+}
+#connected .framer-v1xsz1 {
+  animation: dg-glow-pulse 6s ease-in-out infinite alternate 3s;
+}
 /* Add to GitHub Actions */
 .dg-install { padding: 72px 16px; font-family: Switzer, Inter, system-ui, sans-serif; color: var(--ink); scroll-margin-top: 80px; }
 .dg-install-inner { max-width: 720px; margin: 0 auto; display: grid; gap: 20px; justify-items: start; }
